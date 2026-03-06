@@ -10,7 +10,6 @@
 // @run-at       document-start
 // @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/universal-video-link-finder.user.js
 // @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/universal-video-link-finder.user.js
-// @allFrames    true
 // ==/UserScript==
 
 (() => {
