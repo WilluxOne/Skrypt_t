@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      2.0.0
+// @version      1.0.0
 // @description  Finds direct video URLs first, then M3U8, DASH, and other manifests. Copies the best hit and shows a menu near the player.
 // @match        *://*/*
 // @grant        GM_setClipboard
