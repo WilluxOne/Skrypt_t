@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 1
-// @description  Wykrywa bezpośrednie linki do wideo (MP4/WebM), a następnie playlisty M3U8/MPD i kopiuje najlepszy wynik.
+// @version      beta 2
+// @description  Finds direct video URLs first, then M3U8, DASH, and other manifests. Includes fallback handling for relative URLs and late network hooks.
 // @author       Willux
 // @match        *://*/*
 // @grant        GM_setClipboard
@@ -10,12 +10,11 @@
 // @run-at       document-start
 // @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_beta.user.js
 // @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_beta.user.js
+// @allFrames    true
 // ==/UserScript==
 
 (() => {
   'use strict';
-
-  // Krótko: skrypt szuka najlepszych URL-i wideo na stronie i pozwala je szybko skopiować.
 
   const DIRECT_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv', 'mpg', 'mpeg']);
   const MANIFEST_EXTS = new Set(['m3u8', 'mpd']);
@@ -57,7 +56,7 @@
       autoScanOnPlay: true,
       showLowConfidence: false,
       preferDirect: true,
-      autoKopiujOnPlay: false
+      autoCopyOnPlay: false
     }
   };
 
@@ -276,7 +275,7 @@
       white-space: nowrap;
       opacity: 0.98;
     }
-    .tm-vlf-przez {
+    .tm-vlf-via {
       font-size: 11px;
       opacity: 0.7;
       overflow: hidden;
@@ -303,9 +302,10 @@
     if (isBlobLike(url)) return '';
     try {
       if (isHttpLike(url)) return new URL(url).href;
-      if (isMaybeRelative(url)) return new URL(url, location.href).href;
-      if (/^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(url)) return `https://${url}`;
-      return '';
+      if (/^\/\//.test(url)) return new URL(`${location.protocol}${url}`).href;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return '';
+      if (/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/|$)/i.test(url)) return `https://${url}`;
+      return new URL(url, location.href).href;
     } catch (_) {
       return '';
     }
@@ -396,9 +396,9 @@
       return null;
     }
 
-    if (meta.przez === 'video' || meta.przez === 'source') score += 70;
-    if (meta.przez === 'fetch' || meta.przez === 'xhr') score += 55;
-    if (meta.przez === 'performance') score += 35;
+    if (meta.via === 'video' || meta.via === 'source') score += 70;
+    if (meta.via === 'fetch' || meta.via === 'xhr') score += 55;
+    if (meta.via === 'performance') score += 35;
     if (meta.currentSrc) score += 60;
     if (meta.initiatorType === 'video') score += 35;
 
@@ -408,7 +408,7 @@
       kind,
       score,
       confidence,
-      via: meta.przez ? [meta.via] : [],
+      via: meta.via ? [meta.via] : [],
       initiatorTypes: meta.initiatorType ? [meta.initiatorType] : [],
       contentTypes: contentType ? [contentType] : [],
       firstSeen: Date.now(),
@@ -451,7 +451,7 @@
       seen.add(clean);
 
       const fingerprint = [
-        meta.przez || '',
+        meta.via || '',
         meta.contentType || '',
         meta.initiatorType || '',
         meta.fromMedia ? '1' : '0',
@@ -543,7 +543,7 @@
 
     const best = getBestCandidate();
     const total = state.candidates.size;
-    const bestLabel = best ? `${kindLabel(best.kind)} przez ${best.via.join('+') || 'scan'}` : 'Brak wyniku';
+    const bestLabel = best ? `${kindLabel(best.kind)} via ${best.via.join('+') || 'scan'}` : 'Brak wyniku';
 
     state.statusWrap.innerHTML = '';
 
@@ -557,9 +557,9 @@
     const badges = document.createElement('div');
     badges.className = 'tm-vlf-badges';
     badges.innerHTML = [
-      `<span class="tm-vlf-badge">Najlepszy: ${escapeHtml(bestLabel)}</span>`,
-      `<span class="tm-vlf-badge">Wyniki: ${total}</span>`,
-      `<span class="tm-vlf-badge">Tryb: direct > m3u8 > reszta</span>`
+      `<span class="tm-vlf-badge">Best: ${escapeHtml(bestLabel)}</span>`,
+      `<span class="tm-vlf-badge">Hits: ${total}</span>`,
+      `<span class="tm-vlf-badge">Mode: direct > m3u8 > rest</span>`
     ].join('');
 
     topRow.appendChild(statusText);
@@ -594,16 +594,16 @@
         url.className = 'tm-vlf-url';
         url.textContent = shortUrl(item.url);
         url.title = item.url;
-        const przez = document.createElement('div');
+        const via = document.createElement('div');
         via.className = 'tm-vlf-via';
-        via.textContent = `przez ${item.via.join(', ')}${item.contentTypes[0] ? ` | ${item.contentTypes[0]}` : ''}`;
+        via.textContent = `via ${item.via.join(', ')}${item.contentTypes[0] ? ` | ${item.contentTypes[0]}` : ''}`;
         meta.appendChild(url);
         meta.appendChild(via);
 
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'tm-vlf-mini-btn';
-        copyBtn.textContent = 'Kopiuj';
+        copyBtn.textContent = 'Copy';
         copyBtn.addEventListener('click', async (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -661,7 +661,7 @@
       setButtonState('tm-vlf-ok', successLabel || 'Skopiowano');
       setStatus(`Skopiowano ${candidate.url}`);
     } else {
-      setButtonState('tm-vlf-bad', 'Błąd schowka');
+      setButtonState('tm-vlf-bad', 'Clipboard fail');
       setStatus('Nie udalo sie skopiowac do schowka.');
     }
     return ok;
@@ -692,7 +692,7 @@
     const mediaNodes = document.querySelectorAll('video, audio, source');
     mediaNodes.forEach((node) => {
       const tag = (node.tagName || '').toLowerCase();
-      const przez = tag === 'source' ? 'source' : 'video';
+      const via = tag === 'source' ? 'source' : 'video';
       const src = node.currentSrc || node.src || node.getAttribute('src') || '';
       if (src) ingestCandidate(src, { via, fromMedia: tag !== 'source', currentSrc: !!node.currentSrc });
       const type = node.getAttribute('type') || '';
@@ -735,6 +735,12 @@
       if (!value) return;
       ingestCandidate(value, { via: 'dom' });
     });
+
+    document.querySelectorAll('[href]').forEach((el) => {
+      const value = el.getAttribute('href');
+      if (!value) return;
+      ingestCandidate(value, { via: 'dom' });
+    });
   }
 
   function scanInlineScripts() {
@@ -754,6 +760,91 @@
     scanAttributes();
     scanAnchorsAndLinks();
     scanInlineScripts();
+  }
+
+  function installTransientScanHooks() {
+    const hits = new Set();
+    const restoreFns = [];
+
+    try {
+      if (typeof window.fetch === 'function') {
+        const currentFetch = window.fetch;
+        const scanFetch = function scanFetch(...args) {
+          try {
+            const requestLike = args[0];
+            const requestUrl = requestLike instanceof Request ? requestLike.url : String(requestLike || '');
+            if (requestUrl) {
+              hits.add(requestUrl);
+              ingestCandidate(requestUrl, { via: 'fetch' });
+            }
+          } catch (_) {}
+          return currentFetch.apply(this, args).then((response) => {
+            try {
+              const contentType = response && response.headers ? (response.headers.get('content-type') || '') : '';
+              const responseUrl = response && response.url ? response.url : '';
+              if (responseUrl) {
+                hits.add(responseUrl);
+                ingestCandidate(responseUrl, { via: 'fetch', contentType, initiatorType: 'fetch' });
+              }
+            } catch (_) {}
+            return response;
+          });
+        };
+        window.fetch = scanFetch;
+        restoreFns.push(() => {
+          if (window.fetch === scanFetch) window.fetch = currentFetch;
+        });
+      }
+    } catch (_) {}
+
+    try {
+      const proto = XMLHttpRequest && XMLHttpRequest.prototype;
+      if (proto && typeof proto.open === 'function' && typeof proto.send === 'function') {
+        const currentOpen = proto.open;
+        const currentSend = proto.send;
+        proto.open = function transientOpen(method, url, ...rest) {
+          try {
+            this.__tmVlfScanUrl = String(url || '');
+            if (this.__tmVlfScanUrl) {
+              hits.add(this.__tmVlfScanUrl);
+              ingestCandidate(this.__tmVlfScanUrl, { via: 'xhr' });
+            }
+          } catch (_) {
+            this.__tmVlfScanUrl = String(url || '');
+          }
+          return currentOpen.call(this, method, url, ...rest);
+        };
+        proto.send = function transientSend(...args) {
+          if (!this.__tmVlfTransientListenerAttached) {
+            this.__tmVlfTransientListenerAttached = true;
+            this.addEventListener('loadend', function onTransientLoadEnd() {
+              try {
+                const responseUrl = this.responseURL || this.__tmVlfScanUrl || '';
+                const contentType = this.getResponseHeader('Content-Type') || '';
+                if (responseUrl) {
+                  hits.add(responseUrl);
+                  ingestCandidate(responseUrl, { via: 'xhr', contentType, initiatorType: 'xmlhttprequest' });
+                }
+              } catch (_) {}
+            });
+          }
+          return currentSend.apply(this, args);
+        };
+        restoreFns.push(() => {
+          if (proto.open === transientOpen) proto.open = currentOpen;
+          if (proto.send === transientSend) proto.send = currentSend;
+        });
+      }
+    } catch (_) {}
+
+    return {
+      hits,
+      restore() {
+        while (restoreFns.length) {
+          try { restoreFns.pop()(); } catch (_) {}
+        }
+      }
+    };
   }
 
   function getPreferredTarget() {
@@ -824,28 +915,28 @@
     const rescanBtn = document.createElement('button');
     rescanBtn.type = 'button';
     rescanBtn.className = 'tm-vlf-mini-btn';
-    rescanBtn.textContent = 'Skanuj ponownie';
+    rescanBtn.textContent = 'Rescan';
     rescanBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      await runScan({ copyNajlepszy: false, userTriggered: true });
+      await runScan({ copyBest: false, userTriggered: true });
     });
 
     const copyBestBtn = document.createElement('button');
     copyBestBtn.type = 'button';
     copyBestBtn.className = 'tm-vlf-mini-btn';
-    copyBestBtn.textContent = 'Kopiuj najlepszy';
+    copyBestBtn.textContent = 'Copy best';
     copyBestBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const best = getBestCandidate() || await runScan({ copyNajlepszy: false, userTriggered: true });
+      const best = getBestCandidate() || await runScan({ copyBest: false, userTriggered: true });
       if (best) await copyCandidate(best, `Skopiowano ${kindLabel(best.kind)}`);
     });
 
     const clearBtn = document.createElement('button');
     clearBtn.type = 'button';
     clearBtn.className = 'tm-vlf-mini-btn';
-    clearBtn.textContent = 'Wyczyść';
+    clearBtn.textContent = 'Clear';
     clearBtn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -861,9 +952,9 @@
 
     const toggles = document.createElement('div');
     toggles.className = 'tm-vlf-section tm-vlf-toggles';
-    toggles.appendChild(makeToggle('Auto-skan po PLAY', 'autoScanOnPlay'));
-    toggles.appendChild(makeToggle('Pokaż niską pewność', 'showLowConfidence'));
-    toggles.appendChild(makeToggle('Auto-kopiowanie po PLAY', 'autoKopiujOnPlay'));
+    toggles.appendChild(makeToggle('Auto scan on PLAY', 'autoScanOnPlay'));
+    toggles.appendChild(makeToggle('Show low confidence', 'showLowConfidence'));
+    toggles.appendChild(makeToggle('Auto copy on PLAY', 'autoCopyOnPlay'));
 
     const resultsSection = document.createElement('div');
     resultsSection.className = 'tm-vlf-section';
@@ -965,33 +1056,42 @@
       }
 
       let best = getBestCandidate();
+      const scanHooks = installTransientScanHooks();
       const start = Date.now();
-      const deadline = start + (userTriggered ? LONG_WAIT_MS : SHORT_WAIT_MS);
+      const isBlobTarget = Boolean(target && target.tagName === 'VIDEO' && isBlobLike(target.currentSrc || target.src || ''));
+      const waitMs = isBlobTarget
+        ? (userTriggered ? Math.max(LONG_WAIT_MS, 20000) : Math.max(SHORT_WAIT_MS, 8000))
+        : (userTriggered ? LONG_WAIT_MS : SHORT_WAIT_MS);
+      const deadline = start + waitMs;
       let stableSince = Date.now();
       let bestScore = best ? best.score : -1;
 
-      while (Date.now() < deadline) {
-        fullPerformanceScan();
-        if ((Date.now() - start) % 1400 < POLL_MS) fullDomScan();
-        const current = getBestCandidate();
-        if (current && current.score > bestScore) {
-          best = current;
-          bestScore = current.score;
-          stableSince = Date.now();
-          if (current.kind === 'direct') break;
+      try {
+        while (Date.now() < deadline) {
+          fullPerformanceScan();
+          if ((Date.now() - start) % 1400 < POLL_MS) fullDomScan();
+          const current = getBestCandidate();
+          if (current && current.score > bestScore) {
+            best = current;
+            bestScore = current.score;
+            stableSince = Date.now();
+            if (current.kind === 'direct') break;
+          }
+          if (current && current.score === bestScore && current.url === (best && best.url)) {
+            if (current.kind === 'm3u8' && Date.now() - stableSince > 2000) break;
+            if (current.kind === 'mpd' && Date.now() - stableSince > 2400) break;
+            if (current.kind === 'video-probable' && Date.now() - stableSince > 1600) break;
+          }
+          await sleep(POLL_MS);
         }
-        if (current && current.score === bestScore && current.url === (best && best.url)) {
-          if (current.kind === 'm3u8' && Date.now() - stableSince > 2000) break;
-          if (current.kind === 'mpd' && Date.now() - stableSince > 2400) break;
-          if (current.kind === 'video-probable' && Date.now() - stableSince > 1600) break;
-        }
-        await sleep(POLL_MS);
+      } finally {
+        scanHooks.restore();
       }
 
       best = getBestCandidate();
       if (!best) {
         setButtonState('tm-vlf-bad', 'Brak');
-        setStatus('Brak kandydatow. Sprobuj wlaczyc PLAY albo otworzyc menu i wybrac Skanuj ponownie.');
+        setStatus('Brak kandydatow. Sprobuj wlaczyc PLAY albo otworzyc menu i wybrac Rescan.');
         return null;
       }
 
@@ -1008,7 +1108,7 @@
   async function onMainButtonClick(event) {
     event.preventDefault();
     event.stopPropagation();
-    await runScan({ copyNajlepszy: true, userTriggered: true });
+    await runScan({ copyBest: true, userTriggered: true });
   }
 
   function installFetchHook() {
@@ -1102,8 +1202,8 @@
       schedulePosition();
       if (!state.settings.autoScanOnPlay || state.running) return;
       setStatus('Auto scan po PLAY...');
-      const best = await runScan({ copyNajlepszy: false, userTriggered: false });
-      if (best && state.settings.autoKopiujOnPlay) {
+      const best = await runScan({ copyBest: false, userTriggered: false });
+      if (best && state.settings.autoCopyOnPlay) {
         await copyCandidate(best, `Skopiowano ${kindLabel(best.kind)}`);
       }
     }, true);
