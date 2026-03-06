@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    tm-video-link-finder
-// @version      1.0.1
-// @description  Finds direct video URLs first, then M3U8, DASH, and other manifests. Copies the best hit and shows a menu near the player.
+// @version      2.0.1
+// @description  Finds direct video URLs first, then M3U8, DASH, and other manifests. Includes fallback handling for relative URLs and late network hooks.
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
-// @allFrames    true
 // @run-at       document-start
+// @allFrames    true
 // ==/UserScript==
 
 (() => {
@@ -299,9 +299,10 @@
     if (isBlobLike(url)) return '';
     try {
       if (isHttpLike(url)) return new URL(url).href;
-      if (isMaybeRelative(url)) return new URL(url, location.href).href;
-      if (/^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(url)) return `https://${url}`;
-      return '';
+      if (/^\/\//.test(url)) return new URL(`${location.protocol}${url}`).href;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return '';
+      if (/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/|$)/i.test(url)) return `https://${url}`;
+      return new URL(url, location.href).href;
     } catch (_) {
       return '';
     }
@@ -731,6 +732,12 @@
       if (!value) return;
       ingestCandidate(value, { via: 'dom' });
     });
+
+    document.querySelectorAll('[href]').forEach((el) => {
+      const value = el.getAttribute('href');
+      if (!value) return;
+      ingestCandidate(value, { via: 'dom' });
+    });
   }
 
   function scanInlineScripts() {
@@ -750,6 +757,91 @@
     scanAttributes();
     scanAnchorsAndLinks();
     scanInlineScripts();
+  }
+
+  function installTransientScanHooks() {
+    const hits = new Set();
+    const restoreFns = [];
+
+    try {
+      if (typeof window.fetch === 'function') {
+        const currentFetch = window.fetch;
+        const scanFetch = function scanFetch(...args) {
+          try {
+            const requestLike = args[0];
+            const requestUrl = requestLike instanceof Request ? requestLike.url : String(requestLike || '');
+            if (requestUrl) {
+              hits.add(requestUrl);
+              ingestCandidate(requestUrl, { via: 'fetch' });
+            }
+          } catch (_) {}
+          return currentFetch.apply(this, args).then((response) => {
+            try {
+              const contentType = response && response.headers ? (response.headers.get('content-type') || '') : '';
+              const responseUrl = response && response.url ? response.url : '';
+              if (responseUrl) {
+                hits.add(responseUrl);
+                ingestCandidate(responseUrl, { via: 'fetch', contentType, initiatorType: 'fetch' });
+              }
+            } catch (_) {}
+            return response;
+          });
+        };
+        window.fetch = scanFetch;
+        restoreFns.push(() => {
+          if (window.fetch === scanFetch) window.fetch = currentFetch;
+        });
+      }
+    } catch (_) {}
+
+    try {
+      const proto = XMLHttpRequest && XMLHttpRequest.prototype;
+      if (proto && typeof proto.open === 'function' && typeof proto.send === 'function') {
+        const currentOpen = proto.open;
+        const currentSend = proto.send;
+        proto.open = function transientOpen(method, url, ...rest) {
+          try {
+            this.__tmVlfScanUrl = String(url || '');
+            if (this.__tmVlfScanUrl) {
+              hits.add(this.__tmVlfScanUrl);
+              ingestCandidate(this.__tmVlfScanUrl, { via: 'xhr' });
+            }
+          } catch (_) {
+            this.__tmVlfScanUrl = String(url || '');
+          }
+          return currentOpen.call(this, method, url, ...rest);
+        };
+        proto.send = function transientSend(...args) {
+          if (!this.__tmVlfTransientListenerAttached) {
+            this.__tmVlfTransientListenerAttached = true;
+            this.addEventListener('loadend', function onTransientLoadEnd() {
+              try {
+                const responseUrl = this.responseURL || this.__tmVlfScanUrl || '';
+                const contentType = this.getResponseHeader('Content-Type') || '';
+                if (responseUrl) {
+                  hits.add(responseUrl);
+                  ingestCandidate(responseUrl, { via: 'xhr', contentType, initiatorType: 'xmlhttprequest' });
+                }
+              } catch (_) {}
+            });
+          }
+          return currentSend.apply(this, args);
+        };
+        restoreFns.push(() => {
+          if (proto.open === transientOpen) proto.open = currentOpen;
+          if (proto.send === transientSend) proto.send = currentSend;
+        });
+      }
+    } catch (_) {}
+
+    return {
+      hits,
+      restore() {
+        while (restoreFns.length) {
+          try { restoreFns.pop()(); } catch (_) {}
+        }
+      }
+    };
   }
 
   function getPreferredTarget() {
@@ -961,27 +1053,36 @@
       }
 
       let best = getBestCandidate();
+      const scanHooks = installTransientScanHooks();
       const start = Date.now();
-      const deadline = start + (userTriggered ? LONG_WAIT_MS : SHORT_WAIT_MS);
+      const isBlobTarget = Boolean(target && target.tagName === 'VIDEO' && isBlobLike(target.currentSrc || target.src || ''));
+      const waitMs = isBlobTarget
+        ? (userTriggered ? Math.max(LONG_WAIT_MS, 20000) : Math.max(SHORT_WAIT_MS, 8000))
+        : (userTriggered ? LONG_WAIT_MS : SHORT_WAIT_MS);
+      const deadline = start + waitMs;
       let stableSince = Date.now();
       let bestScore = best ? best.score : -1;
 
-      while (Date.now() < deadline) {
-        fullPerformanceScan();
-        if ((Date.now() - start) % 1400 < POLL_MS) fullDomScan();
-        const current = getBestCandidate();
-        if (current && current.score > bestScore) {
-          best = current;
-          bestScore = current.score;
-          stableSince = Date.now();
-          if (current.kind === 'direct') break;
+      try {
+        while (Date.now() < deadline) {
+          fullPerformanceScan();
+          if ((Date.now() - start) % 1400 < POLL_MS) fullDomScan();
+          const current = getBestCandidate();
+          if (current && current.score > bestScore) {
+            best = current;
+            bestScore = current.score;
+            stableSince = Date.now();
+            if (current.kind === 'direct') break;
+          }
+          if (current && current.score === bestScore && current.url === (best && best.url)) {
+            if (current.kind === 'm3u8' && Date.now() - stableSince > 2000) break;
+            if (current.kind === 'mpd' && Date.now() - stableSince > 2400) break;
+            if (current.kind === 'video-probable' && Date.now() - stableSince > 1600) break;
+          }
+          await sleep(POLL_MS);
         }
-        if (current && current.score === bestScore && current.url === (best && best.url)) {
-          if (current.kind === 'm3u8' && Date.now() - stableSince > 2000) break;
-          if (current.kind === 'mpd' && Date.now() - stableSince > 2400) break;
-          if (current.kind === 'video-probable' && Date.now() - stableSince > 1600) break;
-        }
-        await sleep(POLL_MS);
+      } finally {
+        scanHooks.restore();
       }
 
       best = getBestCandidate();
