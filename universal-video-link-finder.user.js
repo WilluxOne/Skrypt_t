@@ -1,17 +1,21 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    tm-video-link-finder
-// @version      1.1.0
-// @description  Button near player; finds real .m3u8 even when video src is blob: and copies to clipboard. All sites/frames.
+// @version      1.1.1
+// @description  Wyszukuje prawdziwy link .m3u8 przy odtwarzaczu (także gdy src=blob:) i kopiuje go do schowka.
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @run-at       document-idle
+// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/universal-video-link-finder.user.js
+// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/universal-video-link-finder.user.js
 // @allFrames    true
 // ==/UserScript==
 
 (() => {
   "use strict";
+
+  // Skrypt dodaje przycisk przy odtwarzaczu, wykrywa realny adres M3U8 i kopiuje go do schowka.
 
   const isM3U8 = (u) => typeof u === "string" && /\.m3u8(\?|#|$)/i.test(u);
   const isBlob = (u) => typeof u === "string" && u.startsWith("blob:");
@@ -164,7 +168,7 @@
       const src = v?.currentSrc || v?.src || "";
       if (isBlob(src)) {
         // blob: indicates you likely need to press play
-        setBtn("tm-m3u8-run","Włącz PLAY…");
+        setBtn("tm-m3u8-run","Włącz odtwarzanie…");
       }
 
       const url = await findRealM3U8();
@@ -177,13 +181,13 @@
       }
 
       const ok = await copyToClipboard(url);
-      console.log("[TM M3U8] Found:", url);
+      console.log("[TM M3U8] Znaleziono:", url);
 
       setBtn(ok ? "tm-m3u8-ok" : "tm-m3u8-bad", ok ? "Skopiowano" : "Nie skopiowano");
       await sleep(1600);
       setBtn(null,"Szukaj");
     } catch (err) {
-      console.warn("[TM M3U8] Error:", err);
+      console.warn("[TM M3U8] Błąd:", err);
       setBtn("tm-m3u8-bad","Błąd");
       await sleep(1400);
       setBtn(null,"Szukaj");
