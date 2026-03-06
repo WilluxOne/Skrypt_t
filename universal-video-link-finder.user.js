@@ -7,8 +7,8 @@
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @run-at       document-start
-// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/my-script.user.js
-// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/my-script.user.js
+// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/universal-video-link-finder.user.js
+// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/universal-video-link-finder.user.js
 // @allFrames    true
 // ==/UserScript==
 
