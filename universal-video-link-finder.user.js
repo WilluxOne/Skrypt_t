@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.0.0
-// @description  Finds direct video URLs first, then M3U8, DASH, and other manifests. Copies the best hit and shows a menu near the player.
+// @version      1.1
+// @description  Wykrywa bezpośrednie linki do wideo (MP4/WebM), a następnie playlisty M3U8/MPD i kopiuje najlepszy wynik.
+// @author       Willux
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
@@ -14,6 +15,8 @@
 
 (() => {
   'use strict';
+
+  // Krótko: skrypt szuka najlepszych URL-i wideo na stronie i pozwala je szybko skopiować.
 
   const DIRECT_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv', 'mpg', 'mpeg']);
   const MANIFEST_EXTS = new Set(['m3u8', 'mpd']);
@@ -55,7 +58,7 @@
       autoScanOnPlay: true,
       showLowConfidence: false,
       preferDirect: true,
-      autoCopyOnPlay: false
+      autoKopiujOnPlay: false
     }
   };
 
@@ -274,7 +277,7 @@
       white-space: nowrap;
       opacity: 0.98;
     }
-    .tm-vlf-via {
+    .tm-vlf-przez {
       font-size: 11px;
       opacity: 0.7;
       overflow: hidden;
@@ -394,9 +397,9 @@
       return null;
     }
 
-    if (meta.via === 'video' || meta.via === 'source') score += 70;
-    if (meta.via === 'fetch' || meta.via === 'xhr') score += 55;
-    if (meta.via === 'performance') score += 35;
+    if (meta.przez === 'video' || meta.przez === 'source') score += 70;
+    if (meta.przez === 'fetch' || meta.przez === 'xhr') score += 55;
+    if (meta.przez === 'performance') score += 35;
     if (meta.currentSrc) score += 60;
     if (meta.initiatorType === 'video') score += 35;
 
@@ -406,7 +409,7 @@
       kind,
       score,
       confidence,
-      via: meta.via ? [meta.via] : [],
+      via: meta.przez ? [meta.via] : [],
       initiatorTypes: meta.initiatorType ? [meta.initiatorType] : [],
       contentTypes: contentType ? [contentType] : [],
       firstSeen: Date.now(),
@@ -449,7 +452,7 @@
       seen.add(clean);
 
       const fingerprint = [
-        meta.via || '',
+        meta.przez || '',
         meta.contentType || '',
         meta.initiatorType || '',
         meta.fromMedia ? '1' : '0',
@@ -541,7 +544,7 @@
 
     const best = getBestCandidate();
     const total = state.candidates.size;
-    const bestLabel = best ? `${kindLabel(best.kind)} via ${best.via.join('+') || 'scan'}` : 'Brak wyniku';
+    const bestLabel = best ? `${kindLabel(best.kind)} przez ${best.via.join('+') || 'scan'}` : 'Brak wyniku';
 
     state.statusWrap.innerHTML = '';
 
@@ -555,9 +558,9 @@
     const badges = document.createElement('div');
     badges.className = 'tm-vlf-badges';
     badges.innerHTML = [
-      `<span class="tm-vlf-badge">Best: ${escapeHtml(bestLabel)}</span>`,
-      `<span class="tm-vlf-badge">Hits: ${total}</span>`,
-      `<span class="tm-vlf-badge">Mode: direct > m3u8 > rest</span>`
+      `<span class="tm-vlf-badge">Najlepszy: ${escapeHtml(bestLabel)}</span>`,
+      `<span class="tm-vlf-badge">Wyniki: ${total}</span>`,
+      `<span class="tm-vlf-badge">Tryb: direct > m3u8 > reszta</span>`
     ].join('');
 
     topRow.appendChild(statusText);
@@ -592,16 +595,16 @@
         url.className = 'tm-vlf-url';
         url.textContent = shortUrl(item.url);
         url.title = item.url;
-        const via = document.createElement('div');
+        const przez = document.createElement('div');
         via.className = 'tm-vlf-via';
-        via.textContent = `via ${item.via.join(', ')}${item.contentTypes[0] ? ` | ${item.contentTypes[0]}` : ''}`;
+        via.textContent = `przez ${item.via.join(', ')}${item.contentTypes[0] ? ` | ${item.contentTypes[0]}` : ''}`;
         meta.appendChild(url);
         meta.appendChild(via);
 
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'tm-vlf-mini-btn';
-        copyBtn.textContent = 'Copy';
+        copyBtn.textContent = 'Kopiuj';
         copyBtn.addEventListener('click', async (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -659,7 +662,7 @@
       setButtonState('tm-vlf-ok', successLabel || 'Skopiowano');
       setStatus(`Skopiowano ${candidate.url}`);
     } else {
-      setButtonState('tm-vlf-bad', 'Clipboard fail');
+      setButtonState('tm-vlf-bad', 'Błąd schowka');
       setStatus('Nie udalo sie skopiowac do schowka.');
     }
     return ok;
@@ -690,7 +693,7 @@
     const mediaNodes = document.querySelectorAll('video, audio, source');
     mediaNodes.forEach((node) => {
       const tag = (node.tagName || '').toLowerCase();
-      const via = tag === 'source' ? 'source' : 'video';
+      const przez = tag === 'source' ? 'source' : 'video';
       const src = node.currentSrc || node.src || node.getAttribute('src') || '';
       if (src) ingestCandidate(src, { via, fromMedia: tag !== 'source', currentSrc: !!node.currentSrc });
       const type = node.getAttribute('type') || '';
@@ -822,28 +825,28 @@
     const rescanBtn = document.createElement('button');
     rescanBtn.type = 'button';
     rescanBtn.className = 'tm-vlf-mini-btn';
-    rescanBtn.textContent = 'Rescan';
+    rescanBtn.textContent = 'Skanuj ponownie';
     rescanBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      await runScan({ copyBest: false, userTriggered: true });
+      await runScan({ copyNajlepszy: false, userTriggered: true });
     });
 
     const copyBestBtn = document.createElement('button');
     copyBestBtn.type = 'button';
     copyBestBtn.className = 'tm-vlf-mini-btn';
-    copyBestBtn.textContent = 'Copy best';
+    copyBestBtn.textContent = 'Kopiuj najlepszy';
     copyBestBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const best = getBestCandidate() || await runScan({ copyBest: false, userTriggered: true });
+      const best = getBestCandidate() || await runScan({ copyNajlepszy: false, userTriggered: true });
       if (best) await copyCandidate(best, `Skopiowano ${kindLabel(best.kind)}`);
     });
 
     const clearBtn = document.createElement('button');
     clearBtn.type = 'button';
     clearBtn.className = 'tm-vlf-mini-btn';
-    clearBtn.textContent = 'Clear';
+    clearBtn.textContent = 'Wyczyść';
     clearBtn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -859,9 +862,9 @@
 
     const toggles = document.createElement('div');
     toggles.className = 'tm-vlf-section tm-vlf-toggles';
-    toggles.appendChild(makeToggle('Auto scan on PLAY', 'autoScanOnPlay'));
-    toggles.appendChild(makeToggle('Show low confidence', 'showLowConfidence'));
-    toggles.appendChild(makeToggle('Auto copy on PLAY', 'autoCopyOnPlay'));
+    toggles.appendChild(makeToggle('Auto-skan po PLAY', 'autoScanOnPlay'));
+    toggles.appendChild(makeToggle('Pokaż niską pewność', 'showLowConfidence'));
+    toggles.appendChild(makeToggle('Auto-kopiowanie po PLAY', 'autoKopiujOnPlay'));
 
     const resultsSection = document.createElement('div');
     resultsSection.className = 'tm-vlf-section';
@@ -989,7 +992,7 @@
       best = getBestCandidate();
       if (!best) {
         setButtonState('tm-vlf-bad', 'Brak');
-        setStatus('Brak kandydatow. Sprobuj wlaczyc PLAY albo otworzyc menu i wybrac Rescan.');
+        setStatus('Brak kandydatow. Sprobuj wlaczyc PLAY albo otworzyc menu i wybrac Skanuj ponownie.');
         return null;
       }
 
@@ -1006,7 +1009,7 @@
   async function onMainButtonClick(event) {
     event.preventDefault();
     event.stopPropagation();
-    await runScan({ copyBest: true, userTriggered: true });
+    await runScan({ copyNajlepszy: true, userTriggered: true });
   }
 
   function installFetchHook() {
@@ -1100,8 +1103,8 @@
       schedulePosition();
       if (!state.settings.autoScanOnPlay || state.running) return;
       setStatus('Auto scan po PLAY...');
-      const best = await runScan({ copyBest: false, userTriggered: false });
-      if (best && state.settings.autoCopyOnPlay) {
+      const best = await runScan({ copyNajlepszy: false, userTriggered: false });
+      if (best && state.settings.autoKopiujOnPlay) {
         await copyCandidate(best, `Skopiowano ${kindLabel(best.kind)}`);
       }
     }, true);
