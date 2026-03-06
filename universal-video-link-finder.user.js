@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    tm-video-link-finder
-// @version      1.0.0
+// @version      1.0.1
 // @description  Finds direct video URLs first, then M3U8, DASH, and other manifests. Copies the best hit and shows a menu near the player.
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
+// @allFrames    true
 // @run-at       document-start
 // ==/UserScript==
 
