@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.1
+// @version      1.1.1
 // @description  Wykrywa bezpośrednie linki do wideo (MP4/WebM), a następnie playlisty M3U8/MPD i kopiuje najlepszy wynik.
 // @author       Willux
 // @match        *://*/*
