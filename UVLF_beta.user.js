@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 3
+// @version      beta 4
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
@@ -18,6 +18,18 @@
 
   const DIRECT_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv', 'mpg', 'mpeg']);
   const MANIFEST_EXTS = new Set(['m3u8', 'mpd']);
+  const EMBED_HOST_PATTERNS = [
+    /(^|\.)voe\.(sx|com|network)$/i,
+    /(^|\.)vidmoly\./i,
+    /(^|\.)streamtape\./i,
+    /(^|\.)dood\./i,
+    /(^|\.)filemoon\./i,
+    /(^|\.)uqload\./i,
+    /(^|\.)mixdrop\./i,
+    /(^|\.)ok\.ru$/i,
+    /(^|\.)vtube\./i,
+    /(^|\.)luluvdo\./i
+  ];
   const IGNORE_EXTS = new Set([
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'ico', 'css', 'js', 'map', 'json', 'xml', 'txt',
     'vtt', 'srt', 'ass', 'ssa', 'ttml', 'otf', 'ttf', 'woff', 'woff2', 'eot', 'm4s', 'ts', 'aac',
@@ -354,6 +366,19 @@
     return false;
   }
 
+  function looksLikeEmbedHostUrl(url) {
+    try {
+      const u = new URL(url, location.href);
+      const host = u.hostname || '';
+      const path = u.pathname || '';
+      if (EMBED_HOST_PATTERNS.some((re) => re.test(host))) return true;
+      if (/\/(?:e|embed|v)\//i.test(path) && /(?:voe|vidmoly|streamtape|dood|filemoon|mixdrop|uqload)/i.test(host)) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function looksLikeManifestUrl(url) {
     const lower = url.toLowerCase();
     return /(manifest|playlist|master|stream|index)/.test(lower) && !isLikelySegment(lower, getUrlExt(lower));
@@ -399,6 +424,10 @@
       kind = 'manifest';
       confidence = 'medium';
       score = 600;
+    } else if (looksLikeEmbedHostUrl(cleanUrl) || meta.embedHost) {
+      kind = 'embed';
+      confidence = 'medium';
+      score = 520;
     } else {
       return null;
     }
@@ -504,7 +533,8 @@
       case 'mpd': return 2;
       case 'video-probable': return 3;
       case 'manifest': return 4;
-      default: return 5;
+      case 'embed': return 5;
+      default: return 6;
     }
   }
 
@@ -542,6 +572,7 @@
       case 'm3u8': return 'M3U8';
       case 'mpd': return 'MPD';
       case 'manifest': return 'Manifest';
+      case 'embed': return 'Embed';
       default: return kind.toUpperCase();
     }
   }
@@ -745,6 +776,14 @@
     });
   }
 
+  function scanIframes() {
+    document.querySelectorAll('iframe[src], embed[src], object[data]').forEach((el) => {
+      const value = el.getAttribute('src') || el.getAttribute('data') || '';
+      if (!value) return;
+      ingestCandidate(value, { via: 'iframe', embedHost: true });
+    });
+  }
+
   function scanInlineScripts() {
     const scripts = Array.from(document.scripts || []).slice(0, 80);
     const pattern = /(?:https?:\/\/|\/|\.\/|\.\.\/)[^\s"'`<>]+?(?:\.m3u8|\.mpd|\.(?:mp4|webm|mov|m4v|mkv|avi|ogv|mpg|mpeg))(?:[^\s"'`<>]*)/gi;
@@ -761,6 +800,7 @@
     scanMediaElements();
     scanAttributes();
     scanAnchorsAndLinks();
+    scanIframes();
     scanInlineScripts();
   }
 
@@ -940,7 +980,11 @@
     ensureUI();
     state.activeTarget = getPreferredTarget();
     if (!state.activeTarget) {
-      state.root.classList.remove('tm-vlf-visible');
+      const rootWidth = state.root.offsetWidth || 240;
+      const x = clamp((window.innerWidth / 2) - (rootWidth / 2), 8, Math.max(8, window.innerWidth - rootWidth - 8));
+      state.root.style.left = `${Math.round(x)}px`;
+      state.root.style.top = `8px`;
+      state.root.classList.add('tm-vlf-visible');
       return;
     }
 
@@ -1007,7 +1051,11 @@
         return null;
       }
 
-      setStatus(`Najlepszy kandydat: ${best.url}`);
+      if (best.kind === 'embed') {
+        setStatus(`Wykryto host osadzonego playera: ${best.url}`);
+      } else {
+        setStatus(`Najlepszy kandydat: ${best.url}`);
+      }
       setButtonState('tm-vlf-ok', kindLabel(best.kind));
       if (copyBest) await copyCandidate(best, `Skopiowano ${kindLabel(best.kind)}`);
       return best;
@@ -1030,7 +1078,7 @@
       try {
         const requestLike = args[0];
         const requestUrl = requestLike instanceof Request ? requestLike.url : String(requestLike || '');
-        if (requestUrl) ingestCandidate(requestUrl, { via: 'fetch' });
+        if (requestUrl) ingestCandidate(requestUrl, { via: 'fetch', embedHost: true });
       } catch (_) {}
       return originalFetch.apply(this, args).then((response) => {
         try {
@@ -1038,7 +1086,8 @@
           ingestCandidate(response.url || '', {
             via: 'fetch',
             contentType,
-            initiatorType: 'fetch'
+            initiatorType: 'fetch',
+            embedHost: true
           });
         } catch (_) {}
         return response;
@@ -1070,7 +1119,7 @@
           try {
             const responseUrl = this.responseURL || this.__tmVlfUrl || '';
             const contentType = this.getResponseHeader('Content-Type') || '';
-            ingestCandidate(responseUrl, { via: 'xhr', contentType, initiatorType: 'xmlhttprequest' });
+            ingestCandidate(responseUrl, { via: 'xhr', contentType, initiatorType: 'xmlhttprequest', embedHost: true });
           } catch (_) {}
         });
       }
@@ -1086,7 +1135,7 @@
       const observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
           if (!entry || !entry.name) continue;
-          ingestCandidate(entry.name, { via: 'performance', initiatorType: entry.initiatorType || '' });
+          ingestCandidate(entry.name, { via: 'performance', initiatorType: entry.initiatorType || '', embedHost: true });
         }
       });
       try {
