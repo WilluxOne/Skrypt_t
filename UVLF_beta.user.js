@@ -2,14 +2,15 @@
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
 // @version      beta 10
+// @version      beta 9
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @run-at       document-start
-// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_beta.user.js
-// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_beta.user.js
+// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/refs/heads/main/UVLF_probe.user.js
+// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/refs/heads/main/UVLF_probe.user.js
 // @allFrames    true
 // ==/UserScript==
 
@@ -991,6 +992,26 @@
           setButtonState('tm-vlf-bad', 'Brak linku MPC');
           setStatus('Nie znaleziono direct/m3u8/mpd ani sensownego URL osadzonego playera.');
         }
+      }
+    });
+
+    const copyEmbedBtn = document.createElement('button');
+    copyEmbedBtn.type = 'button';
+    copyEmbedBtn.className = 'tm-vlf-mini-btn';
+    copyEmbedBtn.textContent = 'Copy embed host';
+    copyEmbedBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      let embed = getBestEmbedCandidate();
+      if (!embed) {
+        await runScan({ copyBest: false, userTriggered: true });
+        embed = getBestEmbedCandidate();
+      }
+      if (embed) {
+        await copyCandidate(embed, 'Skopiowano Embed');
+      } else {
+        setButtonState('tm-vlf-bad', 'Brak Embed');
+        setStatus('Nie znaleziono sensownego URL osadzonego playera.');
       }
     });
 

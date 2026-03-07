@@ -2,6 +2,7 @@
 // @name         UVLF Universal Probe
 // @namespace    https://github.com/WilluxOne/Skrypt_t
 // @version      1.3.0
+// @version      1.2.0
 // @description  Uniwersalny probe diagnostyczny dla UVLF_beta. Zbiera UI, targety, video, źródła URL i klasyfikację transportu bez sprzężenia z konkretną wersją.
 // @author       OpenAI
 // @match        *://*/*
