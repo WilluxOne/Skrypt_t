@@ -1,9 +1,9 @@
 // ==UserScript==
-//          UVLF_beta
-//     https://github.com/WilluxOne/Skrypt_t
-//       beta 12
+// @name         UVLF_beta
+// @namespace    https://github.com/WilluxOne/Skrypt_t
+// @version      beta 12
 // @description  Uniwersalny wykrywacz realnych URL-i wideo (direct/m3u8/mpd/embed) z UI i kopiowaniem.
-//        WilluxOne
+// @author       WilluxOne
 // @match        *://*/*
 // @allFrames    true
 // @run-at       document-start
