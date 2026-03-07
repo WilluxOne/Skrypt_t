@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 10
+
 // @version      beta 9
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
@@ -448,8 +448,20 @@
   }
 
   function looksLikeManifestUrl(url) {
-    const lower = url.toLowerCase();
-    return /(manifest|playlist|master|stream|index)/.test(lower) && !isLikelySegment(lower, getUrlExt(lower));
+    try {
+      const u = new URL(url, location.href);
+      const path = (u.pathname || '').toLowerCase();
+      const query = (u.search || '').toLowerCase();
+      const ext = getUrlExt(u.href);
+      if (isLikelySegment(u.href, ext)) return false;
+      if (ext === 'm3u8' || ext === 'mpd') return true;
+      if (/(?:^|\/)(?:manifest|playlist|master|index)(?:[._\/-]|$)/.test(path)) return true;
+      if (/(?:^|[?&])(m3u8|mpd|hls|dash|manifest|playlist|master|file|source|src|url)=/.test(query)) return true;
+      if (/\/(?:hls|dash)\//.test(path)) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   function inferKind(url, meta = {}) {
