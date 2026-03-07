@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 7
+// @version      beta 8
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
@@ -119,6 +119,25 @@
       font: 700 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }
     .tm-vlf-root.tm-vlf-visible { display: block; }
+
+    .tm-vlf-root,
+    .tm-vlf-root *,
+    .tm-vlf-root .tm-vlf-btn,
+    .tm-vlf-root .tm-vlf-menu-btn,
+    .tm-vlf-root .tm-vlf-mini-btn,
+    .tm-vlf-root .tm-vlf-badge,
+    .tm-vlf-root .tm-vlf-pill,
+    .tm-vlf-root .tm-vlf-status-text,
+    .tm-vlf-root .tm-vlf-url,
+    .tm-vlf-root .tm-vlf-via,
+    .tm-vlf-root label,
+    .tm-vlf-root span,
+    .tm-vlf-root div,
+    .tm-vlf-root button {
+      color: #fff !important;
+      text-shadow: 0 0 2px rgba(100,170,255,0.95), 0 0 8px rgba(60,130,255,0.8), 0 0 14px rgba(60,130,255,0.45);
+      font-weight: 700 !important;
+    }
     .tm-vlf-toolbar {
       display: inline-flex;
       align-items: center;
