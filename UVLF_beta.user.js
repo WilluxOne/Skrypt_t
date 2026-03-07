@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 16
+// @version      beta 17
 // @description  Agresywny detektor strumieni wideo (m3u8, mpd, hls/dash) z kopiowaniem bezpośrednich linków. Szuka w network, dom, data-attrs. Wzorowane na tm-hls-dash-downloader i m3u8-pro-player.
 // @author       WilluxOne
 // @match        *://*/*
