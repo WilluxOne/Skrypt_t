@@ -1,16 +1,15 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-
-// @version      beta 9
+// @version      beta 10
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @run-at       document-start
-// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/refs/heads/main/UVLF_probe.user.js
-// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/refs/heads/main/UVLF_probe.user.js
+// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_beta.user.js
+// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_beta.user.js
 // @allFrames    true
 // ==/UserScript==
 
@@ -31,10 +30,6 @@
     /(^|\.)vtube\./i,
     /(^|\.)luluvdo\./i
   ];
-  const WRAPPER_JUNK_PATH_RE = /\/(?:profile|profil|user|users|tag|tags|category|categories|kategoria|search|szukaj|help|faq|premium|logout|wylogowanie|account|login|register|signup|kontakt|contact|policy|privacy|terms|regulamin|cookies|ads?|reklama|about|home|index|browse|listing|list|forum|comments?|community)(?:\/|$)/i;
-  const WRAPPER_JUNK_QUERY_RE = /(?:^|[?&])(page|sort|filter|cat|category|tag|profile|user|uid|q|query|search|s|ref|utm_[^=]+|fbclid|gclid)=/i;
-  const MEDIA_HINT_RE = /(?:\.m3u8|\.mpd|\.(?:mp4|webm|mov|m4v|mkv|avi|ogv|mpg|mpeg))(?:$|[?#&])/i;
-  const MEDIA_QUERY_HINT_RE = /(?:^|[?&])(file|src|source|url|video|stream|hls|m3u8|mpd|playlist|manifest|play)=/i;
   const IGNORE_EXTS = new Set([
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'ico', 'css', 'js', 'map', 'json', 'xml', 'txt',
     'vtt', 'srt', 'ass', 'ssa', 'ttml', 'otf', 'ttf', 'woff', 'woff2', 'eot', 'm4s', 'ts', 'aac',
@@ -120,29 +115,9 @@
       display: none;
       pointer-events: auto;
       color: #fff;
-      text-shadow: 0 0 2px rgba(100,170,255,0.9), 0 0 8px rgba(60,130,255,0.75);
-      font: 700 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font: 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }
     .tm-vlf-root.tm-vlf-visible { display: block; }
-
-    .tm-vlf-root,
-    .tm-vlf-root *,
-    .tm-vlf-root .tm-vlf-btn,
-    .tm-vlf-root .tm-vlf-menu-btn,
-    .tm-vlf-root .tm-vlf-mini-btn,
-    .tm-vlf-root .tm-vlf-badge,
-    .tm-vlf-root .tm-vlf-pill,
-    .tm-vlf-root .tm-vlf-status-text,
-    .tm-vlf-root .tm-vlf-url,
-    .tm-vlf-root .tm-vlf-via,
-    .tm-vlf-root label,
-    .tm-vlf-root span,
-    .tm-vlf-root div,
-    .tm-vlf-root button {
-      color: #fff !important;
-      text-shadow: 0 0 2px rgba(100,170,255,0.95), 0 0 8px rgba(60,130,255,0.8), 0 0 14px rgba(60,130,255,0.45);
-      font-weight: 700 !important;
-    }
     .tm-vlf-toolbar {
       display: inline-flex;
       align-items: center;
@@ -152,7 +127,6 @@
       border: 1px solid rgba(255,255,255,0.22);
       background: rgba(20,20,20,0.78);
       color: #fff;
-      text-shadow: 0 0 2px rgba(100,170,255,0.9), 0 0 8px rgba(60,130,255,0.75);
       cursor: pointer;
       user-select: none;
       backdrop-filter: blur(8px);
@@ -189,7 +163,6 @@
       border-radius: 999px;
       background: rgba(255,255,255,0.12);
       font-size: 11px;
-      font-weight: 700;
       line-height: 1;
       opacity: 0.97;
     }
@@ -420,48 +393,9 @@
     }
   }
 
-  function isLikelyWrapperJunkUrl(url, meta = {}) {
-    if (!url) return true;
-    if (looksLikeEmbedHostUrl(url) || meta.embedHost) return false;
-    if (MEDIA_HINT_RE.test(url)) return false;
-
-    try {
-      const u = new URL(url, location.href);
-      const path = u.pathname || '/';
-      const hash = u.hash || '';
-      const sameOrigin = u.origin === location.origin;
-
-      if ((u.href === location.href || `${u.origin}${path}` === `${location.origin}${location.pathname}`) && (hash || !u.search)) return true;
-      if (hash && (hash === '#' || hash === '#!' || /^#!(?:$|\/)/.test(hash))) return true;
-      if (isNavigationLikeUrl(u.href)) return true;
-      if (/^(?:javascript:|about:blank)$/i.test(u.href)) return true;
-
-      if (!sameOrigin) return false;
-      if (WRAPPER_JUNK_PATH_RE.test(path)) return true;
-      if (WRAPPER_JUNK_QUERY_RE.test(u.search || '')) return true;
-
-      if ((!path || path === '/' || /^\/(?:index(?:\.[a-z0-9]+)?|home)?$/i.test(path)) && !MEDIA_QUERY_HINT_RE.test(u.search || '')) return true;
-      return false;
-    } catch (_) {
-      return true;
-    }
-  }
-
   function looksLikeManifestUrl(url) {
-    try {
-      const u = new URL(url, location.href);
-      const path = (u.pathname || '').toLowerCase();
-      const query = (u.search || '').toLowerCase();
-      const ext = getUrlExt(u.href);
-      if (isLikelySegment(u.href, ext)) return false;
-      if (ext === 'm3u8' || ext === 'mpd') return true;
-      if (/(?:^|\/)(?:manifest|playlist|master|index)(?:[._\/-]|$)/.test(path)) return true;
-      if (/(?:^|[?&])(m3u8|mpd|hls|dash|manifest|playlist|master|file|source|src|url)=/.test(query)) return true;
-      if (/\/(?:hls|dash)\//.test(path)) return true;
-      return false;
-    } catch (_) {
-      return false;
-    }
+    const lower = url.toLowerCase();
+    return /(manifest|playlist|master|stream|index)/.test(lower) && !isLikelySegment(lower, getUrlExt(lower));
   }
 
   function inferKind(url, meta = {}) {
@@ -475,7 +409,7 @@
     const segment = isLikelySegment(cleanUrl, ext);
 
     if (IGNORE_EXTS.has(ext) && !MANIFEST_EXTS.has(ext) && !DIRECT_EXTS.has(ext)) return null;
-    if ((isNavigationLikeUrl(cleanUrl) || isLikelyWrapperJunkUrl(cleanUrl, meta)) && !meta.embedHost && !looksLikeEmbedHostUrl(cleanUrl)) return null;
+    if (isNavigationLikeUrl(cleanUrl) && !meta.embedHost) return null;
 
     let kind = '';
     let confidence = 'low';
@@ -504,7 +438,7 @@
     } else if (looksLikeEmbedHostUrl(cleanUrl) || meta.embedHost) {
       kind = 'embed';
       confidence = 'medium';
-      score = 780;
+      score = 760;
     } else if (looksLikeManifestUrl(cleanUrl) || /mpegurl|dash|manifest|playlist/.test(contentType)) {
       kind = 'manifest';
       confidence = 'medium';
@@ -521,12 +455,8 @@
     if (meta.initiatorType === 'video') score += 35;
     try {
       const u = new URL(cleanUrl, location.href);
-      const sameOrigin = u.origin === location.origin;
-      if (sameOrigin && !DIRECT_EXTS.has(ext) && !MANIFEST_EXTS.has(ext) && kind !== 'embed') score -= 220;
-      if (sameOrigin && (u.hash || /^!(?:$|\/)/.test((u.hash || '').replace(/^#/, '')))) score -= 320;
-      if (isLikelyWrapperJunkUrl(cleanUrl, meta) && kind !== 'embed') score -= 500;
-      if (kind === 'embed' && !sameOrigin) score += 80;
-      if (kind === 'embed' && /\/(?:e|embed|v|d)\//i.test(u.pathname || '')) score += 50;
+      if (u.origin === location.origin && !DIRECT_EXTS.has(ext) && !MANIFEST_EXTS.has(ext) && kind !== 'embed') score -= 180;
+      if (u.origin === location.origin && (u.hash || /^!(?:$|\/)/.test((u.hash || '').replace(/^#/, '')))) score -= 250;
     } catch (_) {}
 
     return {
@@ -643,17 +573,6 @@
 
   function getBestCandidate() {
     return getSortedCandidates()[0] || null;
-  }
-
-  function getBestEmbedCandidate() {
-    const embeds = getSortedCandidates().filter((item) => item.kind === 'embed');
-    return embeds[0] || null;
-  }
-
-  function getBestPlayableCandidate() {
-    const playableKinds = new Set(['direct', 'm3u8', 'mpd', 'manifest', 'video-probable']);
-    const playable = getSortedCandidates().filter((item) => playableKinds.has(item.kind));
-    return playable[0] || null;
   }
 
   function shortUrl(url) {
@@ -988,63 +907,8 @@
     copyBestBtn.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      let bestPlayable = getBestPlayableCandidate();
-      if (!bestPlayable) {
-        await runScan({ copyBest: false, userTriggered: true });
-        bestPlayable = getBestPlayableCandidate();
-      }
-      if (bestPlayable) {
-        await copyCandidate(bestPlayable, `Skopiowano ${kindLabel(bestPlayable.kind)}`);
-      } else {
-        const embed = getBestEmbedCandidate();
-        if (embed) {
-          setButtonState('tm-vlf-bad', 'Brak linku MPC');
-          setStatus('Nie znaleziono direct/m3u8/mpd. Dostepny tylko Embed - uzyj "Copy embed host".');
-        } else {
-          setButtonState('tm-vlf-bad', 'Brak linku MPC');
-          setStatus('Nie znaleziono direct/m3u8/mpd ani sensownego URL osadzonego playera.');
-        }
-      }
-    });
-
-    const copyEmbedBtn = document.createElement('button');
-    copyEmbedBtn.type = 'button';
-    copyEmbedBtn.className = 'tm-vlf-mini-btn';
-    copyEmbedBtn.textContent = 'Copy embed host';
-    copyEmbedBtn.addEventListener('click', async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      let embed = getBestEmbedCandidate();
-      if (!embed) {
-        await runScan({ copyBest: false, userTriggered: true });
-        embed = getBestEmbedCandidate();
-      }
-      if (embed) {
-        await copyCandidate(embed, 'Skopiowano Embed');
-      } else {
-        setButtonState('tm-vlf-bad', 'Brak Embed');
-        setStatus('Nie znaleziono sensownego URL osadzonego playera.');
-      }
-    });
-
-    const copyEmbedBtn = document.createElement('button');
-    copyEmbedBtn.type = 'button';
-    copyEmbedBtn.className = 'tm-vlf-mini-btn';
-    copyEmbedBtn.textContent = 'Copy embed host';
-    copyEmbedBtn.addEventListener('click', async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      let embed = getBestEmbedCandidate();
-      if (!embed) {
-        await runScan({ copyBest: false, userTriggered: true });
-        embed = getBestEmbedCandidate();
-      }
-      if (embed) {
-        await copyCandidate(embed, 'Skopiowano Embed');
-      } else {
-        setButtonState('tm-vlf-bad', 'Brak Embed');
-        setStatus('Nie znaleziono sensownego URL osadzonego playera.');
-      }
+      const best = getBestCandidate() || await runScan({ copyBest: false, userTriggered: true });
+      if (best) await copyCandidate(best, `Skopiowano ${kindLabel(best.kind)}`);
     });
 
     const clearBtn = document.createElement('button');
@@ -1062,7 +926,6 @@
 
     actions.appendChild(rescanBtn);
     actions.appendChild(copyBestBtn);
-    actions.appendChild(copyEmbedBtn);
     actions.appendChild(clearBtn);
 
     const toggles = document.createElement('div');
@@ -1226,20 +1089,7 @@
   async function onMainButtonClick(event) {
     event.preventDefault();
     event.stopPropagation();
-    await runScan({ copyBest: false, userTriggered: true });
-    const playable = getBestPlayableCandidate();
-    if (playable) {
-      await copyCandidate(playable, `Skopiowano ${kindLabel(playable.kind)}`);
-      return;
-    }
-    const embed = getBestEmbedCandidate();
-    if (embed) {
-      setButtonState('tm-vlf-bad', 'Brak linku MPC');
-      setStatus('Znaleziono tylko Embed. Uzyj przycisku "Copy embed host" w menu.');
-    } else {
-      setButtonState('tm-vlf-bad', 'Brak linku MPC');
-      setStatus('Brak direct/m3u8/mpd/manifest.');
-    }
+    await runScan({ copyBest: true, userTriggered: true });
   }
 
   function installFetchHook() {
@@ -1249,7 +1099,7 @@
       try {
         const requestLike = args[0];
         const requestUrl = requestLike instanceof Request ? requestLike.url : String(requestLike || '');
-        if (requestUrl) ingestCandidate(requestUrl, { via: 'fetch', embedHost: looksLikeEmbedHostUrl(requestUrl) });
+        if (requestUrl) ingestCandidate(requestUrl, { via: 'fetch', embedHost: true });
       } catch (_) {}
       return originalFetch.apply(this, args).then((response) => {
         try {
@@ -1258,7 +1108,7 @@
             via: 'fetch',
             contentType,
             initiatorType: 'fetch',
-            embedHost: looksLikeEmbedHostUrl(response.url || '')
+            embedHost: true
           });
         } catch (_) {}
         return response;
@@ -1290,7 +1140,7 @@
           try {
             const responseUrl = this.responseURL || this.__tmVlfUrl || '';
             const contentType = this.getResponseHeader('Content-Type') || '';
-            ingestCandidate(responseUrl, { via: 'xhr', contentType, initiatorType: 'xmlhttprequest', embedHost: looksLikeEmbedHostUrl(responseUrl) });
+            ingestCandidate(responseUrl, { via: 'xhr', contentType, initiatorType: 'xmlhttprequest', embedHost: true });
           } catch (_) {}
         });
       }
@@ -1306,7 +1156,7 @@
       const observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
           if (!entry || !entry.name) continue;
-          ingestCandidate(entry.name, { via: 'performance', initiatorType: entry.initiatorType || '', embedHost: looksLikeEmbedHostUrl(entry.name) });
+          ingestCandidate(entry.name, { via: 'performance', initiatorType: entry.initiatorType || '', embedHost: true });
         }
       });
       try {
@@ -1368,26 +1218,11 @@
     document.addEventListener('visibilitychange', schedulePosition, true);
   }
 
-  function installHookWatchdog() {
-    const repair = () => {
-      try {
-        installFetchHook();
-        installXhrHook();
-      } catch (_) {}
-    };
-    setInterval(repair, 2500);
-    window.addEventListener('focus', repair, true);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') repair();
-    }, true);
-  }
-
   installFetchHook();
   installXhrHook();
   installPerformanceObserver();
   installMediaListeners();
   installMutationWatcher();
-  installHookWatchdog();
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
