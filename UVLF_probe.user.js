@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         UVLF_probe
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.4.1
-// @description  Bezpieczny skrypt diagnostyczny dla UVLF_beta. Generuje raport tekstowy o jawnie dostępnych źródłach media bez ekstrakcji ukrytych strumieni zewnętrznych.
+// @version      1.4.2
+// @description  Independent diagnostic probe for UVLF_beta. Exposed DOM/performance only. No fetch/XHR hooks, no inline-script scraping.
 // @author       WilluxOne
 // @match        *://*/*
 // @allFrames    true
@@ -13,426 +13,558 @@
 // ==/UserScript==
 
 (function () {
-  'use strict';
+    'use strict';
 
-  const DIRECT_EXT_RE = /\.(mp4|webm|mov|m4v|mkv|avi|ogv|mpg|mpeg)(?:$|[?#])/i;
-  const M3U8_RE = /(?:\.m3u8(?:$|[?#]))|(?:[?&](?:hls|m3u8|playlist)=)/i;
-  const MPD_RE = /(?:\.mpd(?:$|[?#]))|(?:[?&](?:mpd|dash)=)/i;
-  const MANIFEST_RE = /(?:manifest|playlist|master)(?:[/?#&=_-]|$)/i;
-  const SEGMENT_RE = /\.(?:m4s|ts|cmfv?|cmfa|aac|vtt|key)(?:$|[?#])/i;
-  const IMAGE_EXT_RE = /\.(png|jpe?g|gif|svg|webp|bmp|ico|avif)(?:$|[?#])/i;
-  const STATIC_EXT_RE = /\.(css|js|map|woff2?|ttf|otf|eot)(?:$|[?#])/i;
+    const SCRIPT_ID = 'uvlf-beta-probe';
+    const REPORT_CHANNEL = '__UVLF_BETA_PROBE_CHANNEL__';
+    const MAX_DATA_ATTR_ELEMENTS = 250;
+    const MAX_HREF_ELEMENTS = 120;
+    const MAX_PERF_ENTRIES = 250;
 
-  const state = {
-    host: null,
-    shadow: null,
-    refs: {},
-    objectUrls: [],
-    mounted: false,
-  };
-
-  patchCreateObjectURL();
-  boot();
-
-  function patchCreateObjectURL() {
-    try {
-      const original = URL.createObjectURL;
-      if (typeof original !== 'function' || original.__uvlfProbeWrapped) return;
-      const wrapped = function () {
-        const value = original.apply(this, arguments);
-        const obj = arguments[0];
-        state.objectUrls.push({
-          at: new Date().toISOString(),
-          url: value,
-          kind: obj && obj.constructor ? obj.constructor.name : typeof obj,
-          type: obj && typeof obj.type === 'string' ? obj.type : '',
-          size: obj && typeof obj.size === 'number' ? obj.size : null,
-        });
-        return value;
-      };
-      wrapped.__uvlfProbeWrapped = true;
-      URL.createObjectURL = wrapped;
-    } catch (_) {}
-  }
-
-  function boot() {
-    buildUi();
-    window.addEventListener('load', updateReport, { once: true });
-    window.addEventListener('resize', positionUi, { passive: true });
-    window.addEventListener('scroll', positionUi, { passive: true, capture: true });
-    document.addEventListener('readystatechange', () => {
-      if (document.readyState === 'interactive' || document.readyState === 'complete') {
-        buildUi();
-        updateReport();
-      }
-    });
-    window.setTimeout(updateReport, 1000);
-  }
-
-  function buildUi() {
-    if (state.mounted) return;
-    const mount = document.documentElement || document.body;
-    if (!mount) {
-      window.setTimeout(buildUi, 50);
-      return;
-    }
-
-    const host = document.createElement('div');
-    host.setAttribute('data-uvlf-probe-root', '1');
-    host.style.position = 'fixed';
-    host.style.top = '12px';
-    host.style.right = '12px';
-    host.style.zIndex = '2147483645';
-    host.style.font = 'normal 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-
-    const shadow = host.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `
-      <style>
-        :host { all: initial; }
-        .probe {
-          width: min(88vw, 420px);
-          display: grid;
-          gap: 8px;
-          padding: 10px;
-          border-radius: 16px;
-          background: rgba(0, 0, 0, 0.84);
-          color: #eef7f4;
-          border: 1px solid rgba(88, 192, 168, 0.55);
-          box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
-        }
-        .row { display: flex; align-items: center; gap: 8px; }
-        .title { font-size: 13px; font-weight: 700; flex: 1 1 auto; }
-        button {
-          appearance: none;
-          border: 1px solid rgba(88, 192, 168, 0.65);
-          background: rgba(17, 24, 26, 0.96);
-          color: #eef7f4;
-          border-radius: 12px;
-          padding: 7px 10px;
-          cursor: pointer;
-          font: inherit;
-        }
-        .note { font-size: 11px; color: #d1e7df; opacity: 0.9; }
-        textarea {
-          width: 100%;
-          min-height: 220px;
-          resize: vertical;
-          border-radius: 12px;
-          border: 1px solid rgba(88, 192, 168, 0.28);
-          background: rgba(8, 12, 14, 0.95);
-          color: #eef7f4;
-          padding: 10px;
-          box-sizing: border-box;
-          font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        }
-        .pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 4px 8px;
-          border-radius: 999px;
-          background: rgba(16, 22, 24, 0.96);
-          border: 1px solid rgba(88, 192, 168, 0.35);
-          font-size: 11px;
-          font-weight: 700;
-        }
-      </style>
-      <div class="probe">
-        <div class="row">
-          <span class="title">UVLF Probe (diagnostyka)</span>
-          <span class="pill" id="summary">start</span>
-        </div>
-        <div class="row">
-          <button id="refreshBtn">Odśwież</button>
-          <button id="copyBtn">Kopiuj raport</button>
-          <button id="toggleBtn">Zwiń</button>
-        </div>
-        <div class="note">Bezpieczny raport diagnostyczny: tylko źródła jawne i same-origin performance. Brak ekstrakcji ukrytych URL-i.</div>
-        <textarea id="report" spellcheck="false"></textarea>
-      </div>
-    `;
-
-    mount.appendChild(host);
-    state.host = host;
-    state.shadow = shadow;
-    state.refs = {
-      report: shadow.getElementById('report'),
-      summary: shadow.getElementById('summary'),
+    const SELECTORS = {
+        targets: 'video, iframe[src], embed[src], object[data]',
+        videos: 'video',
+        containers: 'iframe[src], embed[src], object[data]',
+        sources: 'video source[src], source[src]',
+        hrefs: 'a[href], link[href]',
+        dataAttrs: [
+            'data-src',
+            'data-url',
+            'data-file',
+            'data-video',
+            'data-stream',
+            'data-hls',
+            'data-m3u8',
+            'data-mpd',
+            'data-dash',
+            'data-manifest',
+            'data-media',
+            'data-play',
+            'data-source',
+            'data-embed'
+        ],
     };
-    shadow.getElementById('refreshBtn').addEventListener('click', updateReport);
-    shadow.getElementById('copyBtn').addEventListener('click', copyReport);
-    shadow.getElementById('toggleBtn').addEventListener('click', () => {
-      const hidden = state.refs.report.style.display === 'none';
-      state.refs.report.style.display = hidden ? 'block' : 'none';
-    });
 
-    state.mounted = true;
-    positionUi();
-  }
+    const QUERY_PARAM_KEYS = [
+        'file', 'src', 'source', 'url', 'play', 'stream', 'hls', 'm3u8', 'mpd',
+        'dash', 'manifest', 'playlist', 'video', 'media', 'embed'
+    ];
 
-  function positionUi() {
-    if (!state.host) return;
-    state.host.style.top = '12px';
-    state.host.style.right = '12px';
-  }
+    const DIRECT_EXT_RE = /\.(mp4|webm|mov|m4v|mkv|avi|ogv|mpg|mpeg)(?:$|[?#])/i;
+    const M3U8_RE = /(?:\.m3u8(?:$|[?#]))|(?:[?&](?:hls|m3u8|playlist)=)/i;
+    const MPD_RE = /(?:\.mpd(?:$|[?#]))|(?:[?&](?:mpd|dash)=)/i;
+    const MANIFEST_RE = /(?:manifest|playlist|master)(?:[/?#&=_-]|$)/i;
+    const SEGMENT_RE = /\.(?:m4s|ts|cmfv?|cmfa|aac|vtt|key)(?:$|[?#])/i;
+    const IMAGE_EXT_RE = /\.(png|jpe?g|gif|svg|webp|bmp|ico|avif)(?:$|[?#])/i;
+    const STATIC_EXT_RE = /\.(css|js|map|woff2?|woff|ttf|otf|eot|xml)(?:$|[?#])/i;
+    const GARBAGE_HOST_RE = /(doubleclick|googletagmanager|google-analytics|recaptcha|facebook\.com\/plugins|fonts\.(?:googleapis|gstatic)|fontawesome|gravatar|hotjar|sentry|analytics)/i;
 
-  function normalizeUrl(value, baseHref) {
-    const raw = String(value == null ? '' : value).trim();
-    if (!raw) return null;
-    if (/^(?:javascript:|data:|mailto:|tel:)/i.test(raw)) return null;
-    if (/^blob:/i.test(raw)) return raw;
-    try {
-      return new URL(raw, baseHref || location.href).href;
-    } catch (_) {
-      return null;
+    const state = {
+        frameId: `probe_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+        createObjectUrlHits: [],
+        uiReady: false,
+        shadow: null,
+        host: null,
+        refs: {},
+        lastReport: '',
+        scanTimer: null,
+        frameReports: new Map(),
+    };
+
+    function text(value) {
+        return String(value == null ? '' : value);
     }
-  }
 
-  function sameOrigin(url) {
-    try {
-      return new URL(url, location.href).origin === location.origin;
-    } catch (_) {
-      return false;
+    function safeNow() {
+        return new Date().toISOString();
     }
-  }
 
-  function classify(url, sourceKind) {
-    if (!url) return 'none';
-    if (/^blob:/i.test(url)) return 'blob';
-    if (SEGMENT_RE.test(url)) return 'segment';
-    if (DIRECT_EXT_RE.test(url)) return 'direct';
-    if (M3U8_RE.test(url)) return 'hls';
-    if (MPD_RE.test(url)) return 'dash';
-    if (MANIFEST_RE.test(url)) return 'manifest';
-    if (sourceKind === 'iframe' || sourceKind === 'embed' || sourceKind === 'object') return 'container';
-    if (IMAGE_EXT_RE.test(url) || STATIC_EXT_RE.test(url)) return 'static';
-    return 'other';
-  }
-
-  function collectVisibleSources() {
-    const items = [];
-    const videos = Array.from(document.querySelectorAll('video'));
-    videos.forEach((video, index) => {
-      const currentSrc = normalizeUrl(video.currentSrc, location.href);
-      const src = normalizeUrl(video.getAttribute('src') || video.src, location.href);
-      if (currentSrc) items.push({ where: `video#${index + 1}.currentSrc`, url: currentSrc, kind: classify(currentSrc, 'video') });
-      if (src) items.push({ where: `video#${index + 1}.src`, url: src, kind: classify(src, 'video') });
-      Array.from(video.querySelectorAll('source[src]')).forEach((source, sourceIndex) => {
-        const value = normalizeUrl(source.getAttribute('src'), location.href);
-        if (value) items.push({ where: `video#${index + 1} source#${sourceIndex + 1}`, url: value, kind: classify(value, 'source') });
-      });
-    });
-
-    Array.from(document.querySelectorAll('iframe[src], embed[src], object[data]')).forEach((node, index) => {
-      const tag = node.tagName.toLowerCase();
-      const attr = tag === 'object' ? 'data' : 'src';
-      const value = normalizeUrl(node.getAttribute(attr), location.href);
-      if (value) items.push({ where: `${tag}#${index + 1}`, url: value, kind: classify(value, tag) });
-    });
-
-    const dataAttrs = ['data-src', 'data-url', 'data-file', 'data-video', 'data-stream', 'data-hls', 'data-m3u8', 'data-manifest', 'data-media'];
-    const selector = dataAttrs.map((attr) => `[${attr}]`).join(',');
-    Array.from(document.querySelectorAll(selector)).slice(0, 200).forEach((node, index) => {
-      dataAttrs.forEach((attr) => {
-        const value = normalizeUrl(node.getAttribute(attr), location.href);
-        if (value) items.push({ where: `data#${index + 1}:${attr}`, url: value, kind: classify(value, 'data') });
-      });
-    });
-
-    return dedupeItems(items);
-  }
-
-  function collectSameOriginPerformance() {
-    try {
-      return dedupeItems(performance.getEntriesByType('resource')
-        .map((entry) => normalizeUrl(entry.name, location.href))
-        .filter(Boolean)
-        .filter(sameOrigin)
-        .filter((url) => !STATIC_EXT_RE.test(url) && !IMAGE_EXT_RE.test(url))
-        .map((url) => ({ where: 'performance', url, kind: classify(url, 'performance') }))
-        .filter((item) => ['direct', 'hls', 'dash', 'manifest', 'other'].includes(item.kind))
-      );
-    } catch (_) {
-      return [];
+    function isTopWindow() {
+        try {
+            return window.top === window.self;
+        } catch (_) {
+            return false;
+        }
     }
-  }
 
-  function dedupeItems(items) {
-    const map = new Map();
-    items.forEach((item) => {
-      if (!item || !item.url) return;
-      if (map.has(item.url)) {
-        const existing = map.get(item.url);
-        if (!existing.where.includes(item.where)) existing.where += `, ${item.where}`;
-        return;
-      }
-      map.set(item.url, { ...item });
-    });
-    return Array.from(map.values());
-  }
-
-  function classifyTransport(visible, perf) {
-    const kinds = [...visible, ...perf].map((item) => item.kind);
-    if (kinds.includes('direct')) return 'direct';
-    if (kinds.includes('hls')) return 'hls';
-    if (kinds.includes('dash')) return 'dash';
-    if (kinds.includes('manifest')) return 'manifest-like';
-    if (kinds.includes('blob')) return 'blob-or-mse';
-    if (kinds.includes('container')) return 'container-only';
-    return 'unknown';
-  }
-
-  function usefulness(visible, perf) {
-    const all = [...visible, ...perf];
-    const hasPlayable = all.some((item) => ['direct', 'hls', 'dash', 'manifest'].includes(item.kind));
-    const hasBlob = all.some((item) => item.kind === 'blob');
-    const hasContainer = all.some((item) => item.kind === 'container');
-    if (hasPlayable) return 'wysoka';
-    if (hasBlob && perf.length) return 'średnia';
-    if (hasContainer) return 'niska';
-    return 'nieznana';
-  }
-
-  function buildReport() {
-    const visible = collectVisibleSources();
-    const perf = collectSameOriginPerformance();
-    const videos = Array.from(document.querySelectorAll('video'));
-    const containers = Array.from(document.querySelectorAll('iframe[src], embed[src], object[data]'));
-    const transport = classifyTransport(visible, perf);
-    const utility = usefulness(visible, perf);
-    const uiFound = document.querySelector('[data-uvlf-root]');
-
-    const lines = [];
-    lines.push('UVLF_beta RAPORT PROBE (BEZPIECZNY)');
-    lines.push(`czas: ${new Date().toISOString()}`);
-    lines.push(`adres: ${location.href}`);
-    lines.push(`tytuł: ${document.title || '(brak tytułu)'}`);
-    lines.push(`ramka: ${window.top === window.self ? 'główna' : 'podramka'}`);
-    lines.push(`wykrytoUIuvlf: ${uiFound ? 'tak' : 'nie'}`);
-    lines.push(`stanDokumentu: ${document.readyState}`);
-    lines.push(`klasyfikacjaTransportu: ${transport}`);
-    lines.push(`przydatnośćDlaZewnętrznegoOdtwarzacza: ${utility}`);
-    lines.push('');
-
-    lines.push('cele:');
-    lines.push(`- videos=${videos.length}`);
-    lines.push(`- containers=${containers.length}`);
-    lines.push('');
-
-    lines.push('wideo:');
-    if (!videos.length) {
-      lines.push('- brak');
-    } else {
-      videos.forEach((video, index) => {
-        const rect = video.getBoundingClientRect();
-        lines.push(`- #${index + 1} rozmiar=${Math.round(rect.width)}x${Math.round(rect.height)} currentSrc=${video.currentSrc || '(pusty)'}`);
-        lines.push(`  src=${video.getAttribute('src') || video.src || '(pusty)'}`);
-        const sources = Array.from(video.querySelectorAll('source[src]')).map((n) => n.getAttribute('src'));
-        lines.push(`  źródła=${sources.length ? sources.join(' | ') : '(brak)'}`);
-      });
+    function tryGetTopWindow() {
+        try {
+            return window.top;
+        } catch (_) {
+            return null;
+        }
     }
-    lines.push('');
 
-    lines.push('iframe/embed/object:');
-    if (!containers.length) {
-      lines.push('- brak');
-    } else {
-      containers.forEach((node, index) => {
-        const tag = node.tagName.toLowerCase();
-        const attr = tag === 'object' ? 'data' : 'src';
-        lines.push(`- #${index + 1} <${tag}> ${node.getAttribute(attr) || '(pusty)'}`);
-      });
+    function normalizeUrl(value, baseHref) {
+        const raw = text(value).trim();
+        if (!raw) return null;
+        if (/^(?:javascript:|data:|mailto:|tel:|about:blank)/i.test(raw)) return null;
+        if (/^blob:/i.test(raw)) return { raw, normalizedUrl: raw, isBlob: true };
+        try {
+            return {
+                raw,
+                normalizedUrl: new URL(raw, baseHref || location.href).href,
+                isBlob: false
+            };
+        } catch (_) {
+            return null;
+        }
     }
-    lines.push('');
 
-    lines.push('widoczneŹródła:');
-    if (!visible.length) {
-      lines.push('- brak');
-    } else {
-      visible.forEach((item, index) => {
-        lines.push(`- #${index + 1} ${item.kind} | ${item.where}`);
-        lines.push(`  ${item.url}`);
-      });
+    function sameOrigin(url) {
+        try {
+            return new URL(url, location.href).origin === location.origin;
+        } catch (_) {
+            return false;
+        }
     }
-    lines.push('');
 
-    lines.push('performanceSameOrigin:');
-    if (!perf.length) {
-      lines.push('- brak');
-    } else {
-      perf.forEach((item, index) => {
-        lines.push(`- #${index + 1} ${item.kind}`);
-        lines.push(`  ${item.url}`);
-      });
+    function isElementVisible(element) {
+        if (!element || typeof element.getBoundingClientRect !== 'function') return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 24 &&
+            rect.height > 24 &&
+            rect.bottom > 0 &&
+            rect.right > 0 &&
+            rect.top < window.innerHeight &&
+            rect.left < window.innerWidth;
     }
-    lines.push('');
 
-    const blobVideos = videos.filter((video) => /^blob:/i.test(video.currentSrc || '') || /^blob:/i.test(video.getAttribute('src') || video.src || ''));
-    lines.push('blobMSE:');
-    lines.push(`- mediaSourceDostępne=${typeof MediaSource !== 'undefined' ? 'tak' : 'nie'}`);
-    lines.push(`- wideoUżywająceBlob=${blobVideos.length}`);
-    lines.push(`- wywołaniaCreateObjectURL=${state.objectUrls.length}`);
-    if (state.objectUrls.length) {
-      state.objectUrls.slice(-10).forEach((entry, index) => {
-        lines.push(`  - #${index + 1} ${entry.at} ${entry.kind} typ=${entry.type || '(brak)'} rozmiar=${entry.size == null ? '(n/d)' : entry.size} url=${entry.url}`);
-      });
+    function classifyTransport(url) {
+        if (!url) return 'unknown';
+        if (/^blob:/i.test(url)) return 'blob';
+        if (DIRECT_EXT_RE.test(url)) return 'direct-file';
+        if (M3U8_RE.test(url)) return 'm3u8-hls';
+        if (MPD_RE.test(url)) return 'mpd-dash';
+        if (MANIFEST_RE.test(url)) return 'manifest-like';
+        if (SEGMENT_RE.test(url)) return 'segment';
+        if (IMAGE_EXT_RE.test(url)) return 'image';
+        if (STATIC_EXT_RE.test(url)) return 'static-asset';
+        return 'page-or-other';
     }
-    lines.push('');
 
-    lines.push('wyłączoneWBezpiecznejWersji:');
-    lines.push('- przechwytywanie fetch');
-    lines.push('- przechwytywanie XMLHttpRequest');
-    lines.push('- skanowanie skryptów inline pod ukryte URL-e');
-    lines.push('- heurystyki ekstrakcji specyficzne dla hosterów');
-    return lines.join('\n');
-  }
-
-  function updateReport() {
-    if (!state.mounted) return;
-    const report = buildReport();
-    state.refs.report.value = report;
-    const visible = collectVisibleSources();
-    const perf = collectSameOriginPerformance();
-    state.refs.summary.textContent = `${classifyTransport(visible, perf)} • ${usefulness(visible, perf)}`;
-  }
-
-  async function copyReport() {
-    const report = state.refs.report.value || buildReport();
-    const ok = await copyText(report);
-    state.refs.summary.textContent = ok ? 'skopiowano' : 'błąd kopiowania';
-  }
-
-  async function copyText(value) {
-    const textValue = String(value == null ? '' : value);
-    if (!textValue) return false;
-
-    try {
-      if (typeof GM_setClipboard === 'function') {
-        GM_setClipboard(textValue, 'text');
-        return true;
-      }
-    } catch (_) {}
-
-    try {
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        await navigator.clipboard.writeText(textValue);
-        return true;
-      }
-    } catch (_) {}
-
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = textValue;
-      ta.style.position = 'fixed';
-      ta.style.top = '-9999px';
-      ta.style.left = '-9999px';
-      (document.body || document.documentElement).appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
-    } catch (_) {
-      return false;
+    function looksUsableForExternalPlayer(url) {
+        const transport = classifyTransport(url);
+        return ['direct-file', 'm3u8-hls', 'mpd-dash', 'manifest-like'].includes(transport);
     }
-  }
+
+    function isGarbageUrl(url) {
+        if (!url) return true;
+        if (/^blob:/i.test(url)) return false;
+        if (GARBAGE_HOST_RE.test(url)) return true;
+        if (IMAGE_EXT_RE.test(url) || STATIC_EXT_RE.test(url) || SEGMENT_RE.test(url)) return true;
+        return false;
+    }
+
+    function extractNestedUrlsFromValue(value, baseHref) {
+        const results = [];
+        const raw = text(value).trim();
+        if (!raw) return results;
+
+        const direct = normalizeUrl(raw, baseHref);
+        if (direct && !direct.isBlob) results.push(direct.normalizedUrl);
+
+        const decoded = [];
+        try { decoded.push(decodeURIComponent(raw)); } catch (_) {}
+        try { decoded.push(decodeURIComponent(decodeURIComponent(raw))); } catch (_) {}
+
+        const bag = [raw, ...decoded];
+        for (const candidateText of bag) {
+            let urlObj = null;
+            try {
+                urlObj = new URL(candidateText, baseHref || location.href);
+            } catch (_) {
+                continue;
+            }
+            for (const key of QUERY_PARAM_KEYS) {
+                const valueFromQuery = urlObj.searchParams.get(key);
+                if (!valueFromQuery) continue;
+                const nested = normalizeUrl(valueFromQuery, urlObj.href);
+                if (nested && !nested.isBlob) results.push(nested.normalizedUrl);
+            }
+        }
+
+        return Array.from(new Set(results));
+    }
+
+    function installCreateObjectUrlProbe() {
+        const URLCtor = window.URL || window.webkitURL;
+        if (!URLCtor || typeof URLCtor.createObjectURL !== 'function') return;
+        if (URLCtor.createObjectURL.__uvlfProbeWrapped) return;
+
+        const original = URLCtor.createObjectURL.bind(URLCtor);
+
+        function wrappedCreateObjectURL(obj) {
+            try {
+                const isMediaSourceObj = typeof window.MediaSource !== 'undefined' && obj instanceof window.MediaSource;
+                if (isMediaSourceObj) {
+                    state.createObjectUrlHits.push({
+                        time: Date.now(),
+                        type: 'MediaSource'
+                    });
+                }
+            } catch (_) {}
+            return original(obj);
+        }
+
+        wrappedCreateObjectURL.__uvlfProbeWrapped = true;
+        URLCtor.createObjectURL = wrappedCreateObjectURL;
+    }
+
+    function collectReport() {
+        const lines = [];
+        const videos = Array.from(document.querySelectorAll(SELECTORS.videos));
+        const containers = Array.from(document.querySelectorAll(SELECTORS.containers));
+        const sourceNodes = Array.from(document.querySelectorAll(SELECTORS.sources));
+        const hrefNodes = Array.from(document.querySelectorAll(SELECTORS.hrefs)).slice(0, MAX_HREF_ELEMENTS);
+        const dataSelector = SELECTORS.dataAttrs.map((attr) => `[${attr}]`).join(',');
+        const dataNodes = Array.from(document.querySelectorAll(dataSelector)).slice(0, MAX_DATA_ATTR_ELEMENTS);
+
+        let performanceEntries = [];
+        try {
+            performanceEntries = performance.getEntriesByType('resource').slice(-MAX_PERF_ENTRIES);
+        } catch (_) {}
+
+        const localBlobVideos = videos.filter((video) => {
+            const currentSrc = text(video.currentSrc).trim();
+            const srcAttr = text(video.getAttribute('src') || video.src).trim();
+            return /^blob:/i.test(currentSrc) || /^blob:/i.test(srcAttr);
+        });
+
+        const likelyPlayerPage = videos.some(isElementVisible);
+        const likelyWrapperPage = !videos.some(isElementVisible) && containers.some(isElementVisible);
+
+        const uiDetected = !!(
+            document.querySelector('#uvlf-beta-safe') ||
+            document.querySelector('[data-uvlf-root="1"]')
+        );
+
+        lines.push('UVLF_beta_probe REPORT');
+        lines.push(`time: ${safeNow()}`);
+        lines.push(`location: ${location.href}`);
+        lines.push(`title: ${document.title || '(brak tytułu)'}`);
+        lines.push(`frame: ${isTopWindow() ? 'top' : 'subframe'}`);
+        lines.push(`frameId: ${state.frameId}`);
+        lines.push('');
+
+        lines.push('ui-state:');
+        lines.push(`- uvlfMainUiDetected: ${uiDetected}`);
+        lines.push('');
+
+        lines.push('page-role:');
+        lines.push(`- likelyPlayerPage: ${likelyPlayerPage}`);
+        lines.push(`- likelyWrapperPage: ${likelyWrapperPage}`);
+        lines.push('');
+
+        lines.push('blob-mse:');
+        lines.push(`- MediaSourceAvailable: ${typeof window.MediaSource !== 'undefined'}`);
+        lines.push(`- localBlobVideos: ${localBlobVideos.length}`);
+        lines.push(`- createObjectURL(MediaSource) seen: ${state.createObjectUrlHits.length > 0}`);
+        lines.push(`- createObjectURL hit count: ${state.createObjectUrlHits.length}`);
+        lines.push('');
+
+        lines.push('targets:');
+        const targets = Array.from(document.querySelectorAll(SELECTORS.targets));
+        if (!targets.length) {
+            lines.push('- none');
+        } else {
+            targets.forEach((node, index) => {
+                const tag = node.tagName.toLowerCase();
+                const attr = tag === 'object' ? 'data' : 'src';
+                const value = node.getAttribute(attr) || '';
+                lines.push(`- #${index + 1} <${tag}> visible=${isElementVisible(node)} value=${value || '(empty)'}`);
+            });
+        }
+        lines.push('');
+
+        lines.push('videos:');
+        if (!videos.length) {
+            lines.push('- none');
+        } else {
+            videos.forEach((video, index) => {
+                const rect = video.getBoundingClientRect();
+                lines.push(`- #${index + 1} visible=${isElementVisible(video)} size=${Math.round(rect.width)}x${Math.round(rect.height)}`);
+                lines.push(`  currentSrc=${video.currentSrc || '(empty)'}`);
+                lines.push(`  currentSrcTransport=${classifyTransport(video.currentSrc || '')}`);
+                lines.push(`  src=${video.getAttribute('src') || video.src || '(empty)'}`);
+                lines.push(`  srcTransport=${classifyTransport(video.getAttribute('src') || video.src || '')}`);
+                const nestedSources = Array.from(video.querySelectorAll('source[src]')).map((node) => node.getAttribute('src'));
+                lines.push(`  sources=${nestedSources.length ? nestedSources.join(' | ') : '(none)'}`);
+            });
+        }
+        lines.push('');
+
+        lines.push('source[src]:');
+        if (!sourceNodes.length) {
+            lines.push('- none');
+        } else {
+            sourceNodes.forEach((node, index) => {
+                const value = node.getAttribute('src') || '';
+                const norm = normalizeUrl(value, location.href);
+                lines.push(`- #${index + 1} raw=${value || '(empty)'} normalized=${norm ? norm.normalizedUrl : '(invalid)'} transport=${classifyTransport(norm ? norm.normalizedUrl : '')}`);
+            });
+        }
+        lines.push('');
+
+        lines.push('containers:');
+        if (!containers.length) {
+            lines.push('- none');
+        } else {
+            containers.forEach((node, index) => {
+                const tag = node.tagName.toLowerCase();
+                const attr = tag === 'object' ? 'data' : 'src';
+                const raw = node.getAttribute(attr) || '';
+                const norm = normalizeUrl(raw, location.href);
+                lines.push(`- #${index + 1} <${tag}> raw=${raw || '(empty)'}`);
+                lines.push(`  normalized=${norm ? norm.normalizedUrl : '(invalid)'}`);
+                lines.push(`  transport=${classifyTransport(norm ? norm.normalizedUrl : '')}`);
+                lines.push(`  externalPlayerUsable=${looksUsableForExternalPlayer(norm ? norm.normalizedUrl : '')}`);
+                extractNestedUrlsFromValue(raw, location.href).forEach((nested) => {
+                    lines.push(`  nested=${nested} transport=${classifyTransport(nested)} usable=${looksUsableForExternalPlayer(nested)}`);
+                });
+            });
+        }
+        lines.push('');
+
+        lines.push('data-attrs:');
+        if (!dataNodes.length) {
+            lines.push('- none');
+        } else {
+            dataNodes.forEach((node, index) => {
+                lines.push(`- #${index + 1} <${node.tagName.toLowerCase()}> visible=${isElementVisible(node)}`);
+                SELECTORS.dataAttrs.forEach((attr) => {
+                    const raw = node.getAttribute(attr);
+                    if (!raw) return;
+                    const norm = normalizeUrl(raw, location.href);
+                    lines.push(`  ${attr}=${raw}`);
+                    lines.push(`    normalized=${norm ? norm.normalizedUrl : '(invalid)'}`);
+                    lines.push(`    transport=${classifyTransport(norm ? norm.normalizedUrl : '')}`);
+                    extractNestedUrlsFromValue(raw, location.href).forEach((nested) => {
+                        lines.push(`    nested=${nested} transport=${classifyTransport(nested)} usable=${looksUsableForExternalPlayer(nested)}`);
+                    });
+                });
+            });
+        }
+        lines.push('');
+
+        lines.push('href scan (conservative):');
+        if (!hrefNodes.length) {
+            lines.push('- none');
+        } else {
+            hrefNodes.forEach((node, index) => {
+                const raw = node.getAttribute('href') || '';
+                const norm = normalizeUrl(raw, location.href);
+                const directish = norm && !norm.isBlob && !isGarbageUrl(norm.normalizedUrl) && (
+                    DIRECT_EXT_RE.test(norm.normalizedUrl) ||
+                    M3U8_RE.test(norm.normalizedUrl) ||
+                    MPD_RE.test(norm.normalizedUrl) ||
+                    MANIFEST_RE.test(norm.normalizedUrl)
+                );
+
+                const nested = extractNestedUrlsFromValue(raw, location.href);
+                if (!directish && !nested.length) return;
+
+                lines.push(`- #${index + 1} raw=${raw}`);
+                if (norm) lines.push(`  normalized=${norm.normalizedUrl}`);
+                if (norm) lines.push(`  transport=${classifyTransport(norm.normalizedUrl)} usable=${looksUsableForExternalPlayer(norm.normalizedUrl)}`);
+                nested.forEach((item) => {
+                    lines.push(`  nested=${item} transport=${classifyTransport(item)} usable=${looksUsableForExternalPlayer(item)}`);
+                });
+            });
+        }
+        lines.push('');
+
+        lines.push('performance same-origin:');
+        const perfUseful = performanceEntries.filter((entry) => {
+            const name = text(entry && entry.name).trim();
+            return name && !isGarbageUrl(name) && sameOrigin(name);
+        });
+
+        if (!perfUseful.length) {
+            lines.push('- none');
+        } else {
+            perfUseful.forEach((entry, index) => {
+                const name = entry.name;
+                lines.push(`- #${index + 1} initiator=${entry.initiatorType || 'resource'} transport=${classifyTransport(name)} usable=${looksUsableForExternalPlayer(name)} url=${name}`);
+            });
+        }
+        lines.push('');
+
+        lines.push('summary:');
+        if (localBlobVideos.length && likelyPlayerPage) {
+            lines.push('- local video uses blob: and page looks like a real player page');
+            lines.push('- if no direct/m3u8/mpd candidate exists, player-page-url should be treated as fallback copyable result');
+            lines.push('- blob itself is diagnostic only and should not be copied as final stream URL');
+        } else if (likelyWrapperPage) {
+            lines.push('- page looks like a wrapper; iframe/embed/object should outrank ordinary page links');
+        } else {
+            lines.push('- no strong wrapper/player distinction from current DOM snapshot');
+        }
+
+        return lines.join('\n');
+    }
+
+    function buildUi() {
+        if (state.uiReady || !isTopWindow()) return;
+
+        const mount = document.documentElement || document.body;
+        if (!mount) {
+            setTimeout(buildUi, 60);
+            return;
+        }
+
+        const host = document.createElement('div');
+        host.id = SCRIPT_ID;
+        host.style.position = 'fixed';
+        host.style.right = '12px';
+        host.style.bottom = '12px';
+        host.style.zIndex = '2147483645';
+
+        const shadow = host.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+<style>
+* { box-sizing: border-box; font: normal 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.box {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px;
+    border-radius: 12px;
+    background: rgba(10, 12, 18, .84);
+    color: #eef3ff;
+    border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 8px 22px rgba(0,0,0,.34);
+    backdrop-filter: blur(10px);
+}
+button {
+    appearance: none;
+    border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.10);
+    color: #fff;
+    border-radius: 10px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-weight: 600;
+}
+button:hover { background: rgba(255,255,255,.16); }
+.status { opacity: .85; max-width: 320px; }
+</style>
+<div class="box">
+    <button id="scanBtn" type="button">Probe: skanuj</button>
+    <button id="copyBtn" type="button">Kopiuj raport</button>
+    <div id="status" class="status">Gotowy</div>
+</div>`;
+
+        mount.appendChild(host);
+        state.host = host;
+        state.shadow = shadow;
+        state.refs = {
+            status: shadow.getElementById('status'),
+            scanBtn: shadow.getElementById('scanBtn'),
+            copyBtn: shadow.getElementById('copyBtn'),
+        };
+
+        shadow.getElementById('scanBtn').addEventListener('click', () => {
+            state.lastReport = collectReport();
+            state.refs.status.textContent = 'Skan zakończony';
+            broadcastLocalReport();
+        });
+
+        shadow.getElementById('copyBtn').addEventListener('click', async () => {
+            state.lastReport = collectReport();
+            const ok = await copyText(state.lastReport);
+            state.refs.status.textContent = ok ? 'Raport skopiowany' : 'Błąd kopiowania';
+            broadcastLocalReport();
+        });
+
+        state.uiReady = true;
+    }
+
+    async function copyText(value) {
+        const raw = text(value);
+        if (!raw) return false;
+
+        try {
+            if (typeof GM_setClipboard === 'function') {
+                GM_setClipboard(raw, 'text');
+                return true;
+            }
+        } catch (_) {}
+
+        try {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                await navigator.clipboard.writeText(raw);
+                return true;
+            }
+        } catch (_) {}
+
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = raw;
+            ta.readOnly = true;
+            ta.style.position = 'fixed';
+            ta.style.top = '-9999px';
+            ta.style.left = '-9999px';
+            (document.body || document.documentElement).appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            ta.remove();
+            return ok;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function broadcastLocalReport() {
+        const payload = {
+            kind: 'uvlf-probe-report',
+            channel: REPORT_CHANNEL,
+            frameId: state.frameId,
+            href: location.href,
+            title: document.title || '',
+            report: state.lastReport || collectReport(),
+            ts: Date.now()
+        };
+
+        if (isTopWindow()) {
+            state.frameReports.set(state.frameId, payload);
+            return;
+        }
+
+        const topWin = tryGetTopWindow();
+        if (!topWin || typeof topWin.postMessage !== 'function') return;
+        try {
+            topWin.postMessage(payload, '*');
+        } catch (_) {}
+    }
+
+    function installBridge() {
+        window.addEventListener('message', (event) => {
+            const data = event && event.data;
+            if (!data || data.channel !== REPORT_CHANNEL || data.kind !== 'uvlf-probe-report') return;
+            if (!isTopWindow()) return;
+            state.frameReports.set(data.frameId, data);
+            if (state.uiReady && state.refs.status) {
+                state.refs.status.textContent = `Zebrano raporty ramek: ${state.frameReports.size}`;
+            }
+        }, false);
+    }
+
+    function init() {
+        installCreateObjectUrlProbe();
+        installBridge();
+        if (isTopWindow()) buildUi();
+
+        document.addEventListener('DOMContentLoaded', () => {
+            state.lastReport = collectReport();
+            broadcastLocalReport();
+        }, { once: true });
+
+        window.addEventListener('load', () => {
+            state.lastReport = collectReport();
+            broadcastLocalReport();
+        }, { once: true });
+    }
+
+    init();
 })();
