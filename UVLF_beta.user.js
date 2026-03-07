@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 6
+// @version      beta 7
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
@@ -116,7 +116,7 @@
       pointer-events: auto;
       color: #fff;
       text-shadow: 0 0 2px rgba(100,170,255,0.9), 0 0 8px rgba(60,130,255,0.75);
-      font: 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font: 700 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }
     .tm-vlf-root.tm-vlf-visible { display: block; }
     .tm-vlf-toolbar {
@@ -165,6 +165,7 @@
       border-radius: 999px;
       background: rgba(255,255,255,0.12);
       font-size: 11px;
+      font-weight: 700;
       line-height: 1;
       opacity: 0.97;
     }
