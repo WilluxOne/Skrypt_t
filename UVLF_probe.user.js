@@ -4,7 +4,6 @@
 // @version      1.4.0
 // @description  Safe diagnostic companion for UVLF_beta. Generates a text report about exposed media state without extracting hidden third-party streams.
 // @author       WilluxOne
-// @description  Safe diagnostic companion for UVLF_beta. Generates a text report about exposed media state without extracting hidden third-party streams.
 // @match        *://*/*
 // @allFrames    true
 // @run-at       document-start
