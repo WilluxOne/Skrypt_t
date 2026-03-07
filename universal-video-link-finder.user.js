@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Video Link Finder
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.2.0
+// @version      1.2.1
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
