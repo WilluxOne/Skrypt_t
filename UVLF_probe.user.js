@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         UVLF Universal Probe
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.4.0
+// @version      1.3.0
+// @version      1.2.0
 // @description  Uniwersalny probe diagnostyczny dla UVLF_beta. Zbiera UI, targety, video, źródła URL i klasyfikację transportu bez sprzężenia z konkretną wersją.
 // @author       OpenAI
 // @match        *://*/*
@@ -84,17 +85,10 @@
     if (/^blob:/i.test(raw)) return { kind: 'blob', usable: false, score: 8, externalPlayer: 'NO', url: raw };
 
     const ext = urlExt(raw);
+    const lower = raw.toLowerCase();
     let kind = 'unknown';
     let score = 20;
     let usable = /^https?:/i.test(raw);
-
-    let path = '';
-    let query = '';
-    try {
-      const u = new URL(raw, location.href);
-      path = (u.pathname || '').toLowerCase();
-      query = (u.search || '').toLowerCase();
-    } catch (_) {}
 
     if (DIRECT_EXTS.has(ext)) { kind = 'direct'; score = 100; }
     else if (ext === 'm3u8') { kind = 'm3u8'; score = 90; }
@@ -102,13 +96,10 @@
     else if (SEGMENT_EXTS.has(ext)) { kind = 'segment'; score = 20; usable = false; }
     else if (IGNORE_EXTS.has(ext)) { kind = 'ignore'; score = 0; usable = false; }
     else if (looksLikeEmbed(raw)) { kind = 'embed'; score = 58; }
-    else if (/(?:^|\/)(?:manifest|playlist|master|index)(?:[._\/-]|$)/.test(path)
-      || /(?:^|[?&])(m3u8|mpd|hls|dash|manifest|playlist|master|file|source|src|url)=/.test(query)
-      || /\/(?:hls|dash)\//.test(path)) { kind = 'manifest-like'; score = 65; }
-    else if (/license|widevine|fairplay|playready/i.test(raw)) { kind = 'license'; score = 5; usable = false; }
-    else if (/token=|expiry=|expires=|signature=|mime=video|content-type=video|videoplayback/i.test(raw)) { kind = 'direct-like'; score = 72; }
+    else if (/(manifest|playlist|master|stream|hls|dash)/i.test(lower)) { kind = 'manifest-like'; score = 65; }
+    else if (/license|widevine|fairplay|playready/i.test(lower)) { kind = 'license'; score = 5; usable = false; }
 
-    const externalPlayer = (kind === 'direct' || kind === 'm3u8' || kind === 'direct-like') ? 'YES'
+    const externalPlayer = (kind === 'direct' || kind === 'm3u8') ? 'YES'
       : (kind === 'mpd' || kind === 'manifest-like' || kind === 'embed' ? 'MAYBE' : 'NO');
 
     return { kind, usable, score, ext, externalPlayer, url: raw };
@@ -117,11 +108,6 @@
   function addCandidate(url, via, note) {
     const meta = classifyUrl(url);
     if (!meta.url || meta.kind === 'invalid') return;
-    if ((via === 'video.currentSrc' || via === 'video.src' || via === 'dom:src') && meta.kind === 'unknown' && /^https?:/i.test(meta.url)) {
-      meta.kind = 'direct-like';
-      meta.score = Math.max(meta.score, 74);
-      meta.externalPlayer = 'YES';
-    }
     const prev = state.candidates.get(meta.url) || {
       url: meta.url, meta, via: new Set(), notes: new Set(), count: 0, firstSeen: Date.now()
     };
