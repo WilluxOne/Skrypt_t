@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UVLF_beta
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      beta 4
+// @version      beta 5
 // @description  Wykrywa adresy wideo, preferuje M3U8/HLS, obsluguje blob:, kopiuje najlepszy wynik i pokazuje menu przy odtwarzaczu.
 // @author       Willux
 // @match        *://*/*
@@ -372,7 +372,21 @@
       const host = u.hostname || '';
       const path = u.pathname || '';
       if (EMBED_HOST_PATTERNS.some((re) => re.test(host))) return true;
-      if (/\/(?:e|embed|v)\//i.test(path) && /(?:voe|vidmoly|streamtape|dood|filemoon|mixdrop|uqload)/i.test(host)) return true;
+      if (/\/(?:e|embed|v|d)\//i.test(path) && /(?:voe|vidmoly|streamtape|dood|filemoon|mixdrop|uqload|luluvdo|streamwish)/i.test(host)) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isNavigationLikeUrl(url) {
+    try {
+      const u = new URL(url, location.href);
+      const samePage = u.origin === location.origin && u.pathname === location.pathname;
+      if (samePage && (u.hash || !u.search)) return true;
+      if (samePage && /^!(?:$|\/)/.test((u.hash || '').replace(/^#/, ''))) return true;
+      if (/\/(profil|premium|wylogowanie|ulubione|poczekalnia|centrum-pomocy|ai\/search)\/?$/i.test(u.pathname)) return true;
+      if (/\/(filmy|seriale|dla-dzieci-pl|materialy|tag)\b/i.test(u.pathname) && !looksLikeEmbedHostUrl(url)) return true;
       return false;
     } catch (_) {
       return false;
@@ -395,6 +409,7 @@
     const segment = isLikelySegment(cleanUrl, ext);
 
     if (IGNORE_EXTS.has(ext) && !MANIFEST_EXTS.has(ext) && !DIRECT_EXTS.has(ext)) return null;
+    if (isNavigationLikeUrl(cleanUrl) && !meta.embedHost) return null;
 
     let kind = '';
     let confidence = 'low';
@@ -420,14 +435,14 @@
       kind = 'video-probable';
       confidence = 'medium';
       score = 690;
+    } else if (looksLikeEmbedHostUrl(cleanUrl) || meta.embedHost) {
+      kind = 'embed';
+      confidence = 'medium';
+      score = 760;
     } else if (looksLikeManifestUrl(cleanUrl) || /mpegurl|dash|manifest|playlist/.test(contentType)) {
       kind = 'manifest';
       confidence = 'medium';
       score = 600;
-    } else if (looksLikeEmbedHostUrl(cleanUrl) || meta.embedHost) {
-      kind = 'embed';
-      confidence = 'medium';
-      score = 520;
     } else {
       return null;
     }
@@ -435,8 +450,14 @@
     if (meta.via === 'video' || meta.via === 'source') score += 70;
     if (meta.via === 'fetch' || meta.via === 'xhr') score += 55;
     if (meta.via === 'performance') score += 35;
+    if (meta.via === 'iframe') score += 120;
     if (meta.currentSrc) score += 60;
     if (meta.initiatorType === 'video') score += 35;
+    try {
+      const u = new URL(cleanUrl, location.href);
+      if (u.origin === location.origin && !DIRECT_EXTS.has(ext) && !MANIFEST_EXTS.has(ext) && kind !== 'embed') score -= 180;
+      if (u.origin === location.origin && (u.hash || /^!(?:$|\/)/.test((u.hash || '').replace(/^#/, '')))) score -= 250;
+    } catch (_) {}
 
     return {
       url: cleanUrl,
@@ -780,7 +801,7 @@
     document.querySelectorAll('iframe[src], embed[src], object[data]').forEach((el) => {
       const value = el.getAttribute('src') || el.getAttribute('data') || '';
       if (!value) return;
-      ingestCandidate(value, { via: 'iframe', embedHost: true });
+      ingestCandidate(value, { via: 'iframe', embedHost: looksLikeEmbedHostUrl(value) });
     });
   }
 
