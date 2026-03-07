@@ -1,393 +1,439 @@
 // ==UserScript==
-// @name         UVLF Universal Probe
+// @name         UVLF_probe
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.3.0
-// @version      1.2.0
-// @description  Uniwersalny probe diagnostyczny dla UVLF_beta. Zbiera UI, targety, video, źródła URL i klasyfikację transportu bez sprzężenia z konkretną wersją.
-// @author       OpenAI
+// @version      1.4.0
+// @description  Safe diagnostic companion for UVLF_beta. Generates a text report about exposed media state without extracting hidden third-party streams.
+// @author       WilluxOne
+// @description  Safe diagnostic companion for UVLF_beta. Generates a text report about exposed media state without extracting hidden third-party streams.
 // @match        *://*/*
-// @grant        GM_setClipboard
-// @grant        GM_addStyle
-// @run-at       document-start
 // @allFrames    true
+// @run-at       document-start
+// @grant        GM_setClipboard
+// @updateURL    https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_probe.user.js
+// @downloadURL  https://raw.githubusercontent.com/WilluxOne/Skrypt_t/main/UVLF_probe.user.js
 // ==/UserScript==
 
-(() => {
+(function () {
   'use strict';
 
-  const MAX_ITEMS = 300;
-  const WATCH_MS = 18000;
-  const POLL_MS = 500;
-  const DIRECT_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv', 'mpg', 'mpeg']);
-  const MANIFEST_EXTS = new Set(['m3u8', 'mpd']);
-  const SEGMENT_EXTS = new Set(['m4s', 'ts', 'cmf', 'cmfv', 'cmfa']);
-  const IGNORE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'css', 'js', 'map', 'json', 'xml', 'txt', 'ico', 'woff', 'woff2', 'ttf', 'eot']);
-  const EMBED_HOST_PATTERNS = [
-    /(^|\.)voe\.(sx|com|network)$/i, /(^|\.)vidmoly\./i, /(^|\.)streamtape\./i, /(^|\.)dood\./i,
-    /(^|\.)filemoon\./i, /(^|\.)uqload\./i, /(^|\.)mixdrop\./i, /(^|\.)ok\.ru$/i, /(^|\.)vtube\./i,
-    /(^|\.)luluvdo\./i, /(^|\.)streamwish\./i
-  ];
+  const DIRECT_EXT_RE = /\.(mp4|webm|mov|m4v|mkv|avi|ogv|mpg|mpeg)(?:$|[?#])/i;
+  const M3U8_RE = /(?:\.m3u8(?:$|[?#]))|(?:[?&](?:hls|m3u8|playlist)=)/i;
+  const MPD_RE = /(?:\.mpd(?:$|[?#]))|(?:[?&](?:mpd|dash)=)/i;
+  const MANIFEST_RE = /(?:manifest|playlist|master)(?:[/?#&=_-]|$)/i;
+  const SEGMENT_RE = /\.(?:m4s|ts|cmfv?|cmfa|aac|vtt|key)(?:$|[?#])/i;
+  const IMAGE_EXT_RE = /\.(png|jpe?g|gif|svg|webp|bmp|ico|avif)(?:$|[?#])/i;
+  const STATIC_EXT_RE = /\.(css|js|map|woff2?|ttf|otf|eot)(?:$|[?#])/i;
 
   const state = {
-    startedAt: Date.now(),
-    runCount: 0,
-    watchersInstalled: false,
-    watchActive: false,
-    candidates: new Map(),
-    performanceSeen: new Set(),
-    iframeHosts: new Map(),
-    videos: [],
-    targets: [],
-    ui: { visible: false, nodes: [] },
-    events: [],
-    reqs: [],
-    errors: [],
-    lastReport: ''
+    host: null,
+    shadow: null,
+    refs: {},
+    objectUrls: [],
+    mounted: false,
   };
 
-  const pushCap = (arr, item, max = MAX_ITEMS) => {
-    arr.push(item);
-    if (arr.length > max) arr.splice(0, arr.length - max);
-  };
-  const trunc = (v, n = 240) => {
-    const s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
-    return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-  };
+  patchCreateObjectURL();
+  boot();
 
-  function cleanUrl(raw) {
-    if (!raw) return '';
-    const v = String(raw).trim().replace(/^['"`]+|['"`]+$/g, '');
-    if (!v || /^(javascript:|data:|mailto:)/i.test(v)) return '';
-    if (/^blob:/i.test(v)) return v;
-    try { return new URL(v, location.href).href; } catch (_) { return ''; }
-  }
-
-  function urlExt(url) {
+  function patchCreateObjectURL() {
     try {
-      const u = new URL(url, location.href);
-      const file = (u.pathname.split('/').pop() || '').toLowerCase();
-      const m = file.match(/\.([a-z0-9]{1,6})$/i);
-      return m ? m[1] : '';
-    } catch (_) { return ''; }
-  }
-
-  function looksLikeEmbed(url) {
-    try {
-      const u = new URL(url, location.href);
-      if (EMBED_HOST_PATTERNS.some((re) => re.test(u.hostname || ''))) return true;
-      return /\/(?:e|embed|v|d)\//i.test(u.pathname || '');
-    } catch (_) { return false; }
-  }
-
-  function classifyUrl(url) {
-    const raw = cleanUrl(url);
-    if (!raw) return { kind: 'invalid', usable: false, score: 0, externalPlayer: 'NO', url: '' };
-    if (/^blob:/i.test(raw)) return { kind: 'blob', usable: false, score: 8, externalPlayer: 'NO', url: raw };
-
-    const ext = urlExt(raw);
-    const lower = raw.toLowerCase();
-    let kind = 'unknown';
-    let score = 20;
-    let usable = /^https?:/i.test(raw);
-
-    if (DIRECT_EXTS.has(ext)) { kind = 'direct'; score = 100; }
-    else if (ext === 'm3u8') { kind = 'm3u8'; score = 90; }
-    else if (ext === 'mpd') { kind = 'mpd'; score = 80; }
-    else if (SEGMENT_EXTS.has(ext)) { kind = 'segment'; score = 20; usable = false; }
-    else if (IGNORE_EXTS.has(ext)) { kind = 'ignore'; score = 0; usable = false; }
-    else if (looksLikeEmbed(raw)) { kind = 'embed'; score = 58; }
-    else if (/(manifest|playlist|master|stream|hls|dash)/i.test(lower)) { kind = 'manifest-like'; score = 65; }
-    else if (/license|widevine|fairplay|playready/i.test(lower)) { kind = 'license'; score = 5; usable = false; }
-
-    const externalPlayer = (kind === 'direct' || kind === 'm3u8') ? 'YES'
-      : (kind === 'mpd' || kind === 'manifest-like' || kind === 'embed' ? 'MAYBE' : 'NO');
-
-    return { kind, usable, score, ext, externalPlayer, url: raw };
-  }
-
-  function addCandidate(url, via, note) {
-    const meta = classifyUrl(url);
-    if (!meta.url || meta.kind === 'invalid') return;
-    const prev = state.candidates.get(meta.url) || {
-      url: meta.url, meta, via: new Set(), notes: new Set(), count: 0, firstSeen: Date.now()
-    };
-    if (meta.score > prev.meta.score) prev.meta = meta;
-    prev.count += 1;
-    prev.lastSeen = Date.now();
-    if (via) prev.via.add(via);
-    if (note) prev.notes.add(trunc(note, 140));
-    state.candidates.set(meta.url, prev);
-
-    if (meta.kind === 'embed') {
-      try {
-        const u = new URL(meta.url, location.href);
-        const host = u.hostname || '(none)';
-        state.iframeHosts.set(host, { host, url: meta.url, seen: (state.iframeHosts.get(host)?.seen || 0) + 1 });
-      } catch (_) {}
-    }
-  }
-
-  function sortedCandidates() {
-    return [...state.candidates.values()]
-      .filter((x) => !['ignore'].includes(x.meta.kind))
-      .sort((a, b) => (b.meta.score - a.meta.score) || (b.count - a.count) || (b.lastSeen - a.lastSeen));
-  }
-
-  function bestCandidate() {
-    return sortedCandidates()[0] || null;
-  }
-
-  function collectTargets() {
-    const nodes = [...document.querySelectorAll('video,iframe,embed,object,[class*="player"],[id*="player"],[class*="video"],[id*="video"]')];
-    state.targets = nodes.slice(0, 12).map((el) => `${el.tagName}${el.id ? `#${el.id}` : ''}${el.className && typeof el.className === 'string' ? `.${el.className.split(/\s+/).slice(0,2).join('.')}` : ''}`);
-  }
-
-  function collectVideos() {
-    state.videos = [...document.querySelectorAll('video')].slice(0, 10).map((v) => {
-      const r = v.getBoundingClientRect();
-      const currentSrc = v.currentSrc || '';
-      if (currentSrc) addCandidate(currentSrc, 'video.currentSrc', 'video');
-      if (v.src) addCandidate(v.src, 'video.src', 'video');
-      [...v.querySelectorAll('source[src]')].slice(0, 8).forEach((s) => addCandidate(s.src || s.getAttribute('src'), 'source[src]', 'video source'));
-      return {
-        visible: r.width > 1 && r.height > 1,
-        size: `${Math.round(r.width)}x${Math.round(r.height)}`,
-        paused: !!v.paused,
-        readyState: v.readyState,
-        currentSrc: trunc(currentSrc),
-        src: trunc(v.src || '')
-      };
-    });
-  }
-
-  function scanDom() {
-    const selectors = ['video[src]', 'source[src]', 'iframe[src]', 'embed[src]', 'object[data]', 'a[href]', 'link[href]', '[data-src]', '[data-url]', '[data-file]', '[data-video]', '[data-stream]', '[data-hls]', '[data-m3u8]', '[data-mpd]'];
-    for (const sel of selectors) {
-      for (const el of document.querySelectorAll(sel)) {
-        ['src', 'href', 'data', 'data-src', 'data-url', 'data-file', 'data-video', 'data-stream', 'data-hls', 'data-m3u8', 'data-mpd'].forEach((attr) => {
-          const val = el.getAttribute && el.getAttribute(attr);
-          if (!val) return;
-          addCandidate(val, `dom:${attr}`, el.tagName);
+      const original = URL.createObjectURL;
+      if (typeof original !== 'function' || original.__uvlfProbeWrapped) return;
+      const wrapped = function () {
+        const value = original.apply(this, arguments);
+        const obj = arguments[0];
+        state.objectUrls.push({
+          at: new Date().toISOString(),
+          url: value,
+          kind: obj && obj.constructor ? obj.constructor.name : typeof obj,
+          type: obj && typeof obj.type === 'string' ? obj.type : '',
+          size: obj && typeof obj.size === 'number' ? obj.size : null,
         });
+        return value;
+      };
+      wrapped.__uvlfProbeWrapped = true;
+      URL.createObjectURL = wrapped;
+    } catch (_) {}
+  }
+
+  function boot() {
+    buildUi();
+    window.addEventListener('load', updateReport, { once: true });
+    window.addEventListener('resize', positionUi, { passive: true });
+    window.addEventListener('scroll', positionUi, { passive: true, capture: true });
+    document.addEventListener('readystatechange', () => {
+      if (document.readyState === 'interactive' || document.readyState === 'complete') {
+        buildUi();
+        updateReport();
       }
-    }
+    });
+    window.setTimeout(updateReport, 1000);
   }
 
-  function scanScripts() {
-    const re = /(?:https?:\/\/|\/|\.\/|\.\.\/)[^\s"'`<>]+/g;
-    for (const s of Array.from(document.scripts || []).slice(0, 80)) {
-      const t = (s.textContent || '').slice(0, 160000);
-      if (!t || !/(m3u8|mpd|manifest|playlist|videoplayback|mp4|webm|source|stream)/i.test(t)) continue;
-      const found = t.match(re) || [];
-      found.slice(0, 120).forEach((u) => addCandidate(u, 'script-text', 'inline script'));
+  function buildUi() {
+    if (state.mounted) return;
+    const mount = document.documentElement || document.body;
+    if (!mount) {
+      window.setTimeout(buildUi, 50);
+      return;
     }
+
+    const host = document.createElement('div');
+    host.setAttribute('data-uvlf-probe-root', '1');
+    host.style.position = 'fixed';
+    host.style.top = '12px';
+    host.style.right = '12px';
+    host.style.zIndex = '2147483645';
+    host.style.font = 'normal 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        :host { all: initial; }
+        .probe {
+          width: min(88vw, 420px);
+          display: grid;
+          gap: 8px;
+          padding: 10px;
+          border-radius: 16px;
+          background: rgba(0, 0, 0, 0.84);
+          color: #eef7f4;
+          border: 1px solid rgba(88, 192, 168, 0.55);
+          box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+        }
+        .row { display: flex; align-items: center; gap: 8px; }
+        .title { font-size: 13px; font-weight: 700; flex: 1 1 auto; }
+        button {
+          appearance: none;
+          border: 1px solid rgba(88, 192, 168, 0.65);
+          background: rgba(17, 24, 26, 0.96);
+          color: #eef7f4;
+          border-radius: 12px;
+          padding: 7px 10px;
+          cursor: pointer;
+          font: inherit;
+        }
+        .note { font-size: 11px; color: #d1e7df; opacity: 0.9; }
+        textarea {
+          width: 100%;
+          min-height: 220px;
+          resize: vertical;
+          border-radius: 12px;
+          border: 1px solid rgba(88, 192, 168, 0.28);
+          background: rgba(8, 12, 14, 0.95);
+          color: #eef7f4;
+          padding: 10px;
+          box-sizing: border-box;
+          font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+        .pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 8px;
+          border-radius: 999px;
+          background: rgba(16, 22, 24, 0.96);
+          border: 1px solid rgba(88, 192, 168, 0.35);
+          font-size: 11px;
+          font-weight: 700;
+        }
+      </style>
+      <div class="probe">
+        <div class="row">
+          <span class="title">UVLF Probe</span>
+          <span class="pill" id="summary">init</span>
+        </div>
+        <div class="row">
+          <button id="refreshBtn">Odśwież</button>
+          <button id="copyBtn">Kopiuj raport</button>
+          <button id="toggleBtn">Zwiń</button>
+        </div>
+        <div class="note">Bezpieczny raport diagnostyczny: tylko źródła jawne i same-origin performance. Brak ekstrakcji ukrytych URL-i.</div>
+        <textarea id="report" spellcheck="false"></textarea>
+      </div>
+    `;
+
+    mount.appendChild(host);
+    state.host = host;
+    state.shadow = shadow;
+    state.refs = {
+      report: shadow.getElementById('report'),
+      summary: shadow.getElementById('summary'),
+    };
+    shadow.getElementById('refreshBtn').addEventListener('click', updateReport);
+    shadow.getElementById('copyBtn').addEventListener('click', copyReport);
+    shadow.getElementById('toggleBtn').addEventListener('click', () => {
+      const hidden = state.refs.report.style.display === 'none';
+      state.refs.report.style.display = hidden ? 'block' : 'none';
+    });
+
+    state.mounted = true;
+    positionUi();
   }
 
-  function scanPerformance() {
+  function positionUi() {
+    if (!state.host) return;
+    state.host.style.top = '12px';
+    state.host.style.right = '12px';
+  }
+
+  function normalizeUrl(value, baseHref) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return null;
+    if (/^(?:javascript:|data:|mailto:|tel:)/i.test(raw)) return null;
+    if (/^blob:/i.test(raw)) return raw;
     try {
-      for (const e of performance.getEntriesByType('resource')) {
-        if (!e || !e.name || state.performanceSeen.has(e.name)) continue;
-        state.performanceSeen.add(e.name);
-        addCandidate(e.name, `perf:${e.initiatorType || 'resource'}`, e.initiatorType || 'resource');
-      }
-    } catch (e) { pushCap(state.errors, `perf: ${e && e.message ? e.message : e}`); }
-  }
-
-  function detectUi() {
-    const hits = [];
-    const uiNodes = [...document.querySelectorAll('[class],[id],button,div,section,aside')];
-    for (const el of uiNodes) {
-      const sig = `${el.tagName}${el.id ? `#${el.id}` : ''}.${typeof el.className === 'string' ? el.className : ''}`;
-      const text = trunc(el.textContent || '', 100);
-      if (!/(tm-vlf|uvlf|vlf)/i.test(sig + ' ' + text)) continue;
-      const cs = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      hits.push(`${sig} [${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}] d=${cs.display} v=${cs.visibility} o=${cs.opacity}`);
+      return new URL(raw, baseHref || location.href).href;
+    } catch (_) {
+      return null;
     }
-    state.ui.nodes = hits.slice(0, 20);
-    state.ui.visible = hits.some((h) => !/ d=none\b/.test(h) && !/ v=hidden\b/.test(h) && !/ o=0\b/.test(h));
   }
 
-  function transportGuess() {
-    const vals = sortedCandidates();
-    const has = (k) => vals.some((v) => v.meta.kind === k);
-    const hasBlob = vals.some((v) => v.meta.kind === 'blob');
-    if (has('direct')) return 'direct-file';
-    if (has('m3u8') && hasBlob) return 'hls-via-blob';
-    if (has('m3u8')) return 'hls';
-    if (has('mpd') && hasBlob) return 'dash-via-blob';
-    if (has('mpd')) return 'dash';
-    if (has('embed')) return 'embed-fallback';
-    if (hasBlob) return 'blob-mse';
+  function sameOrigin(url) {
+    try {
+      return new URL(url, location.href).origin === location.origin;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function classify(url, sourceKind) {
+    if (!url) return 'none';
+    if (/^blob:/i.test(url)) return 'blob';
+    if (SEGMENT_RE.test(url)) return 'segment';
+    if (DIRECT_EXT_RE.test(url)) return 'direct';
+    if (M3U8_RE.test(url)) return 'hls';
+    if (MPD_RE.test(url)) return 'dash';
+    if (MANIFEST_RE.test(url)) return 'manifest';
+    if (sourceKind === 'iframe' || sourceKind === 'embed' || sourceKind === 'object') return 'container';
+    if (IMAGE_EXT_RE.test(url) || STATIC_EXT_RE.test(url)) return 'static';
+    return 'other';
+  }
+
+  function collectVisibleSources() {
+    const items = [];
+    const videos = Array.from(document.querySelectorAll('video'));
+    videos.forEach((video, index) => {
+      const currentSrc = normalizeUrl(video.currentSrc, location.href);
+      const src = normalizeUrl(video.getAttribute('src') || video.src, location.href);
+      if (currentSrc) items.push({ where: `video#${index + 1}.currentSrc`, url: currentSrc, kind: classify(currentSrc, 'video') });
+      if (src) items.push({ where: `video#${index + 1}.src`, url: src, kind: classify(src, 'video') });
+      Array.from(video.querySelectorAll('source[src]')).forEach((source, sourceIndex) => {
+        const value = normalizeUrl(source.getAttribute('src'), location.href);
+        if (value) items.push({ where: `video#${index + 1} source#${sourceIndex + 1}`, url: value, kind: classify(value, 'source') });
+      });
+    });
+
+    Array.from(document.querySelectorAll('iframe[src], embed[src], object[data]')).forEach((node, index) => {
+      const tag = node.tagName.toLowerCase();
+      const attr = tag === 'object' ? 'data' : 'src';
+      const value = normalizeUrl(node.getAttribute(attr), location.href);
+      if (value) items.push({ where: `${tag}#${index + 1}`, url: value, kind: classify(value, tag) });
+    });
+
+    const dataAttrs = ['data-src', 'data-url', 'data-file', 'data-video', 'data-stream', 'data-hls', 'data-m3u8', 'data-manifest', 'data-media'];
+    const selector = dataAttrs.map((attr) => `[${attr}]`).join(',');
+    Array.from(document.querySelectorAll(selector)).slice(0, 200).forEach((node, index) => {
+      dataAttrs.forEach((attr) => {
+        const value = normalizeUrl(node.getAttribute(attr), location.href);
+        if (value) items.push({ where: `data#${index + 1}:${attr}`, url: value, kind: classify(value, 'data') });
+      });
+    });
+
+    return dedupeItems(items);
+  }
+
+  function collectSameOriginPerformance() {
+    try {
+      return dedupeItems(performance.getEntriesByType('resource')
+        .map((entry) => normalizeUrl(entry.name, location.href))
+        .filter(Boolean)
+        .filter(sameOrigin)
+        .filter((url) => !STATIC_EXT_RE.test(url) && !IMAGE_EXT_RE.test(url))
+        .map((url) => ({ where: 'performance', url, kind: classify(url, 'performance') }))
+        .filter((item) => ['direct', 'hls', 'dash', 'manifest', 'other'].includes(item.kind))
+      );
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function dedupeItems(items) {
+    const map = new Map();
+    items.forEach((item) => {
+      if (!item || !item.url) return;
+      if (map.has(item.url)) {
+        const existing = map.get(item.url);
+        if (!existing.where.includes(item.where)) existing.where += `, ${item.where}`;
+        return;
+      }
+      map.set(item.url, { ...item });
+    });
+    return Array.from(map.values());
+  }
+
+  function classifyTransport(visible, perf) {
+    const kinds = [...visible, ...perf].map((item) => item.kind);
+    if (kinds.includes('direct')) return 'direct';
+    if (kinds.includes('hls')) return 'hls';
+    if (kinds.includes('dash')) return 'dash';
+    if (kinds.includes('manifest')) return 'manifest-like';
+    if (kinds.includes('blob')) return 'blob-or-mse';
+    if (kinds.includes('container')) return 'container-only';
     return 'unknown';
   }
 
-  function externalPlayerGuess() {
-    const best = bestCandidate();
-    return best ? best.meta.externalPlayer : 'NO_URL_SEEN';
+  function usefulness(visible, perf) {
+    const all = [...visible, ...perf];
+    const hasPlayable = all.some((item) => ['direct', 'hls', 'dash', 'manifest'].includes(item.kind));
+    const hasBlob = all.some((item) => item.kind === 'blob');
+    const hasContainer = all.some((item) => item.kind === 'container');
+    if (hasPlayable) return 'wysoka';
+    if (hasBlob && perf.length) return 'średnia';
+    if (hasContainer) return 'niska';
+    return 'nieznana';
   }
 
-  function collectSnapshot(reason) {
-    state.runCount += 1;
-    collectTargets();
-    collectVideos();
-    scanDom();
-    scanScripts();
-    scanPerformance();
-    detectUi();
-    pushCap(state.events, `${Date.now() - state.startedAt}ms snapshot:${reason}`);
-  }
+  function buildReport() {
+    const visible = collectVisibleSources();
+    const perf = collectSameOriginPerformance();
+    const videos = Array.from(document.querySelectorAll('video'));
+    const containers = Array.from(document.querySelectorAll('iframe[src], embed[src], object[data]'));
+    const transport = classifyTransport(visible, perf);
+    const utility = usefulness(visible, perf);
+    const uiFound = document.querySelector('[data-uvlf-root]');
 
-  function report() {
-    const best = bestCandidate();
-    const vals = sortedCandidates();
     const lines = [];
-    lines.push('UVLF Universal Probe report');
-    lines.push(`time=${new Date().toISOString()} frame=${window.top === window ? 'top' : 'child'} href=${location.href}`);
-    lines.push(`ui.visible=${Number(state.ui.visible)} ui.nodes=${state.ui.nodes.length}`);
-    state.ui.nodes.slice(0, 6).forEach((x) => lines.push(`ui.node=${x}`));
-    lines.push(`targets=${state.targets.join(' | ') || 'none'}`);
-    lines.push(`videos=${state.videos.length}`);
-    state.videos.slice(0, 8).forEach((v, i) => lines.push(`video${i + 1}=visible:${Number(v.visible)} size:${v.size} paused:${Number(v.paused)} ready:${v.readyState} currentSrc:${v.currentSrc || '-'} src:${v.src || '-'}`));
-    lines.push(`iframeHosts=${[...state.iframeHosts.values()].map((x) => `${x.host}(${x.seen})`).join(', ') || 'none'}`);
-    lines.push(`transport=${transportGuess()} externalPlayer=${externalPlayerGuess()}`);
-    lines.push(`best=${best ? `${best.meta.kind} score=${best.meta.score} via=${[...best.via].join(',')} url=${best.url}` : 'none'}`);
-    vals.slice(0, 30).forEach((c, i) => lines.push(`cand${i + 1}=${c.meta.kind} score=${c.meta.score} ext=${c.meta.ext || '-'} usable=${Number(c.meta.usable)} mpc=${c.meta.externalPlayer} via=${[...c.via].join(',')} count=${c.count} url=${c.url}`));
-    state.reqs.slice(-30).forEach((r, i) => lines.push(`req${i + 1}=${r}`));
-    state.errors.slice(-20).forEach((e, i) => lines.push(`err${i + 1}=${e}`));
-    state.events.slice(-20).forEach((e, i) => lines.push(`evt${i + 1}=${e}`));
-    state.lastReport = lines.join('\n');
-    return state.lastReport;
+    lines.push('UVLF_beta PROBE SAFE REPORT');
+    lines.push(`time: ${new Date().toISOString()}`);
+    lines.push(`location: ${location.href}`);
+    lines.push(`title: ${document.title || '(brak tytułu)'}`);
+    lines.push(`frame: ${window.top === window.self ? 'top' : 'subframe'}`);
+    lines.push(`uvlfUiDetected: ${uiFound ? 'yes' : 'no'}`);
+    lines.push(`readyState: ${document.readyState}`);
+    lines.push(`transportClassification: ${transport}`);
+    lines.push(`externalPlayerUsefulness: ${utility}`);
+    lines.push('');
+
+    lines.push('targets:');
+    lines.push(`- videos=${videos.length}`);
+    lines.push(`- containers=${containers.length}`);
+    lines.push('');
+
+    lines.push('videos:');
+    if (!videos.length) {
+      lines.push('- none');
+    } else {
+      videos.forEach((video, index) => {
+        const rect = video.getBoundingClientRect();
+        lines.push(`- #${index + 1} size=${Math.round(rect.width)}x${Math.round(rect.height)} currentSrc=${video.currentSrc || '(empty)'}`);
+        lines.push(`  src=${video.getAttribute('src') || video.src || '(empty)'}`);
+        const sources = Array.from(video.querySelectorAll('source[src]')).map((n) => n.getAttribute('src'));
+        lines.push(`  sources=${sources.length ? sources.join(' | ') : '(none)'}`);
+      });
+    }
+    lines.push('');
+
+    lines.push('iframe/embed/object:');
+    if (!containers.length) {
+      lines.push('- none');
+    } else {
+      containers.forEach((node, index) => {
+        const tag = node.tagName.toLowerCase();
+        const attr = tag === 'object' ? 'data' : 'src';
+        lines.push(`- #${index + 1} <${tag}> ${node.getAttribute(attr) || '(empty)'}`);
+      });
+    }
+    lines.push('');
+
+    lines.push('visibleSources:');
+    if (!visible.length) {
+      lines.push('- none');
+    } else {
+      visible.forEach((item, index) => {
+        lines.push(`- #${index + 1} ${item.kind} | ${item.where}`);
+        lines.push(`  ${item.url}`);
+      });
+    }
+    lines.push('');
+
+    lines.push('sameOriginPerformance:');
+    if (!perf.length) {
+      lines.push('- none');
+    } else {
+      perf.forEach((item, index) => {
+        lines.push(`- #${index + 1} ${item.kind}`);
+        lines.push(`  ${item.url}`);
+      });
+    }
+    lines.push('');
+
+    const blobVideos = videos.filter((video) => /^blob:/i.test(video.currentSrc || '') || /^blob:/i.test(video.getAttribute('src') || video.src || ''));
+    lines.push('blobMSE:');
+    lines.push(`- mediaSourceAvailable=${typeof MediaSource !== 'undefined' ? 'yes' : 'no'}`);
+    lines.push(`- videosUsingBlob=${blobVideos.length}`);
+    lines.push(`- createObjectURLCalls=${state.objectUrls.length}`);
+    if (state.objectUrls.length) {
+      state.objectUrls.slice(-10).forEach((entry, index) => {
+        lines.push(`  - #${index + 1} ${entry.at} ${entry.kind} type=${entry.type || '(none)'} size=${entry.size == null ? '(n/a)' : entry.size} url=${entry.url}`);
+      });
+    }
+    lines.push('');
+
+    lines.push('disabledInSafeBuild:');
+    lines.push('- fetch interception');
+    lines.push('- XMLHttpRequest interception');
+    lines.push('- inline script scraping for hidden URLs');
+    lines.push('- hoster-specific extraction heuristics');
+    return lines.join('\n');
   }
 
-  function copyText(text) {
-    try { if (typeof GM_setClipboard === 'function') { GM_setClipboard(text, 'text'); return true; } } catch (_) {}
-    try { navigator.clipboard.writeText(text); return true; } catch (_) {}
-    return false;
+  function updateReport() {
+    if (!state.mounted) return;
+    const report = buildReport();
+    state.refs.report.value = report;
+    const visible = collectVisibleSources();
+    const perf = collectSameOriginPerformance();
+    state.refs.summary.textContent = `${classifyTransport(visible, perf)} • ${usefulness(visible, perf)}`;
   }
 
-  function installHooks() {
-    if (state.watchersInstalled) return;
-    state.watchersInstalled = true;
+  async function copyReport() {
+    const report = state.refs.report.value || buildReport();
+    const ok = await copyText(report);
+    state.refs.summary.textContent = ok ? 'skopiowano' : 'błąd kopiowania';
+  }
+
+  async function copyText(value) {
+    const textValue = String(value == null ? '' : value);
+    if (!textValue) return false;
 
     try {
-      const origFetch = window.fetch;
-      if (typeof origFetch === 'function') {
-        window.fetch = function patchedFetch(...args) {
-          try {
-            const req = args[0] instanceof Request ? args[0].url : String(args[0] || '');
-            addCandidate(req, 'fetch:req', 'fetch');
-            pushCap(state.reqs, `fetch:req ${trunc(req, 300)}`);
-          } catch (_) {}
-          return origFetch.apply(this, args).then((res) => {
-            try {
-              addCandidate(res.url || '', 'fetch:res', String(res.status || ''));
-              pushCap(state.reqs, `fetch:res ${res.status} ${trunc(res.url || '', 300)}`);
-            } catch (_) {}
-            return res;
-          });
-        };
+      if (typeof GM_setClipboard === 'function') {
+        GM_setClipboard(textValue, 'text');
+        return true;
       }
-    } catch (e) { pushCap(state.errors, `hook fetch: ${e && e.message ? e.message : e}`); }
+    } catch (_) {}
 
     try {
-      const proto = XMLHttpRequest && XMLHttpRequest.prototype;
-      if (proto) {
-        const oOpen = proto.open;
-        const oSend = proto.send;
-        proto.open = function patchedOpen(method, url, ...rest) {
-          this.__uvlfProbeUrl = cleanUrl(url) || String(url || '');
-          addCandidate(this.__uvlfProbeUrl, 'xhr:open', method || 'GET');
-          pushCap(state.reqs, `xhr:open ${method || 'GET'} ${trunc(this.__uvlfProbeUrl, 300)}`);
-          return oOpen.call(this, method, url, ...rest);
-        };
-        proto.send = function patchedSend(...args) {
-          this.addEventListener('loadend', () => {
-            try {
-              const ru = this.responseURL || this.__uvlfProbeUrl || '';
-              addCandidate(ru, 'xhr:res', String(this.status || ''));
-              pushCap(state.reqs, `xhr:res ${this.status} ${trunc(ru, 300)}`);
-            } catch (_) {}
-          }, { once: true });
-          return oSend.apply(this, args);
-        };
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(textValue);
+        return true;
       }
-    } catch (e) { pushCap(state.errors, `hook xhr: ${e && e.message ? e.message : e}`); }
+    } catch (_) {}
 
-    window.addEventListener('error', (ev) => pushCap(state.errors, `window.error: ${trunc(ev && ev.message ? ev.message : 'error')}`), true);
-    window.addEventListener('unhandledrejection', (ev) => pushCap(state.errors, `unhandledrejection: ${trunc(ev && ev.reason ? String(ev.reason) : 'rejection')}`), true);
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = textValue;
+      ta.style.position = 'fixed';
+      ta.style.top = '-9999px';
+      ta.style.left = '-9999px';
+      (document.body || document.documentElement).appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (_) {
+      return false;
+    }
   }
-
-  let root; let out;
-  function ensureUi() {
-    if (root) return;
-    const css = `
-      .uvlf-probe-root{position:fixed;right:14px;bottom:14px;z-index:2147483647;color:#fff;font:12px/1.35 system-ui,sans-serif}
-      .uvlf-probe-bar{display:flex;gap:8px;align-items:center}
-      .uvlf-probe-btn{height:34px;padding:0 12px;border-radius:11px;border:1px solid rgba(255,255,255,.22);background:rgba(20,20,20,.82);color:#fff;cursor:pointer}
-      .uvlf-probe-panel{display:none;margin-top:8px;max-width:min(92vw,980px);max-height:min(74vh,680px);overflow:auto;padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(0,0,0,.82);white-space:pre-wrap;word-break:break-word}
-      .uvlf-probe-root.open .uvlf-probe-panel{display:block}
-    `;
-    try { if (typeof GM_addStyle === 'function') GM_addStyle(css); else { const st = document.createElement('style'); st.textContent = css; (document.head || document.documentElement).appendChild(st); } } catch (_) {}
-
-    root = document.createElement('div');
-    root.className = 'uvlf-probe-root';
-    root.innerHTML = '<div class="uvlf-probe-bar">'
-      + '<button class="uvlf-probe-btn" data-act="toggle">Probe</button>'
-      + '<button class="uvlf-probe-btn" data-act="scan">Scan</button>'
-      + '<button class="uvlf-probe-btn" data-act="watch">Watch 18s</button>'
-      + '<button class="uvlf-probe-btn" data-act="copy">Copy report</button>'
-      + '<button class="uvlf-probe-btn" data-act="best">Copy best</button>'
-      + '</div><div class="uvlf-probe-panel"><div class="uvlf-probe-out">UVLF Probe ready.</div></div>';
-    out = root.querySelector('.uvlf-probe-out');
-    root.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-act]');
-      if (!btn) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const act = btn.getAttribute('data-act');
-      if (act === 'toggle') {
-        root.classList.toggle('open');
-        if (root.classList.contains('open')) { collectSnapshot('toggle'); out.textContent = report(); }
-      } else if (act === 'scan') {
-        collectSnapshot('scan');
-        out.textContent = report();
-      } else if (act === 'copy') {
-        collectSnapshot('copy');
-        const rep = report();
-        copyText(rep);
-        out.textContent = `${rep}\n\n[report copied]`;
-      } else if (act === 'best') {
-        collectSnapshot('copy-best');
-        const best = bestCandidate();
-        if (best) copyText(best.url);
-        out.textContent = `${report()}\n\n[best ${best ? 'copied' : 'missing'}]${best ? `\n${best.url}` : ''}`;
-      } else if (act === 'watch') {
-        if (state.watchActive) return;
-        state.watchActive = true;
-        collectSnapshot('watch-start');
-        out.textContent = `${report()}\n\n[watching 18s...]`;
-        const end = Date.now() + WATCH_MS;
-        while (Date.now() < end) {
-          await new Promise((r) => setTimeout(r, POLL_MS));
-          scanPerformance();
-          collectVideos();
-          detectUi();
-        }
-        state.watchActive = false;
-        collectSnapshot('watch-end');
-        out.textContent = report();
-      }
-    }, true);
-
-    (document.documentElement || document.body).appendChild(root);
-  }
-
-  installHooks();
-  ensureUi();
-
-  document.addEventListener('DOMContentLoaded', () => collectSnapshot('domcontentloaded'), { once: true });
-  window.addEventListener('load', () => collectSnapshot('load'), { once: true });
-  setTimeout(() => collectSnapshot('t+2s'), 2000);
-  setTimeout(() => collectSnapshot('t+6s'), 6000);
 })();
