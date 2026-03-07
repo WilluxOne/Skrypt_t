@@ -1,9 +1,9 @@
 // ==UserScript==
-//          UVLF_beta
-//     https://github.com/WilluxOne/Skrypt_t
-//       beta 13
+// @name         UVLF_beta
+// @namespace    https://github.com/WilluxOne/Skrypt_t
+// @version      beta 13
 // @description  Safe media inspector overlay for pages you control or are authorized to debug. Detects exposed media URLs, reports blob state, and provides a small floating UI.
-//        WilluxOne
+// @author       WilluxOne
 // @match        *://*/*
 // @allFrames    true
 // @run-at       document-start
