@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         UVLF_probe
 // @namespace    https://github.com/WilluxOne/Skrypt_t
-// @version      1.4.0
-// @description  Safe diagnostic companion for UVLF_beta. Generates a text report about exposed media state without extracting hidden third-party streams.
+// @version      1.4.1
+// @description  Bezpieczny skrypt diagnostyczny dla UVLF_beta. Generuje raport tekstowy o jawnie dostępnych źródłach media bez ekstrakcji ukrytych strumieni zewnętrznych.
 // @author       WilluxOne
 // @match        *://*/*
 // @allFrames    true
@@ -139,8 +139,8 @@
       </style>
       <div class="probe">
         <div class="row">
-          <span class="title">UVLF Probe</span>
-          <span class="pill" id="summary">init</span>
+          <span class="title">UVLF Probe (diagnostyka)</span>
+          <span class="pill" id="summary">start</span>
         </div>
         <div class="row">
           <button id="refreshBtn">Odśwież</button>
@@ -303,51 +303,51 @@
     const uiFound = document.querySelector('[data-uvlf-root]');
 
     const lines = [];
-    lines.push('UVLF_beta PROBE SAFE REPORT');
-    lines.push(`time: ${new Date().toISOString()}`);
-    lines.push(`location: ${location.href}`);
-    lines.push(`title: ${document.title || '(brak tytułu)'}`);
-    lines.push(`frame: ${window.top === window.self ? 'top' : 'subframe'}`);
-    lines.push(`uvlfUiDetected: ${uiFound ? 'yes' : 'no'}`);
-    lines.push(`readyState: ${document.readyState}`);
-    lines.push(`transportClassification: ${transport}`);
-    lines.push(`externalPlayerUsefulness: ${utility}`);
+    lines.push('UVLF_beta RAPORT PROBE (BEZPIECZNY)');
+    lines.push(`czas: ${new Date().toISOString()}`);
+    lines.push(`adres: ${location.href}`);
+    lines.push(`tytuł: ${document.title || '(brak tytułu)'}`);
+    lines.push(`ramka: ${window.top === window.self ? 'główna' : 'podramka'}`);
+    lines.push(`wykrytoUIuvlf: ${uiFound ? 'tak' : 'nie'}`);
+    lines.push(`stanDokumentu: ${document.readyState}`);
+    lines.push(`klasyfikacjaTransportu: ${transport}`);
+    lines.push(`przydatnośćDlaZewnętrznegoOdtwarzacza: ${utility}`);
     lines.push('');
 
-    lines.push('targets:');
+    lines.push('cele:');
     lines.push(`- videos=${videos.length}`);
     lines.push(`- containers=${containers.length}`);
     lines.push('');
 
-    lines.push('videos:');
+    lines.push('wideo:');
     if (!videos.length) {
-      lines.push('- none');
+      lines.push('- brak');
     } else {
       videos.forEach((video, index) => {
         const rect = video.getBoundingClientRect();
-        lines.push(`- #${index + 1} size=${Math.round(rect.width)}x${Math.round(rect.height)} currentSrc=${video.currentSrc || '(empty)'}`);
-        lines.push(`  src=${video.getAttribute('src') || video.src || '(empty)'}`);
+        lines.push(`- #${index + 1} rozmiar=${Math.round(rect.width)}x${Math.round(rect.height)} currentSrc=${video.currentSrc || '(pusty)'}`);
+        lines.push(`  src=${video.getAttribute('src') || video.src || '(pusty)'}`);
         const sources = Array.from(video.querySelectorAll('source[src]')).map((n) => n.getAttribute('src'));
-        lines.push(`  sources=${sources.length ? sources.join(' | ') : '(none)'}`);
+        lines.push(`  źródła=${sources.length ? sources.join(' | ') : '(brak)'}`);
       });
     }
     lines.push('');
 
     lines.push('iframe/embed/object:');
     if (!containers.length) {
-      lines.push('- none');
+      lines.push('- brak');
     } else {
       containers.forEach((node, index) => {
         const tag = node.tagName.toLowerCase();
         const attr = tag === 'object' ? 'data' : 'src';
-        lines.push(`- #${index + 1} <${tag}> ${node.getAttribute(attr) || '(empty)'}`);
+        lines.push(`- #${index + 1} <${tag}> ${node.getAttribute(attr) || '(pusty)'}`);
       });
     }
     lines.push('');
 
-    lines.push('visibleSources:');
+    lines.push('widoczneŹródła:');
     if (!visible.length) {
-      lines.push('- none');
+      lines.push('- brak');
     } else {
       visible.forEach((item, index) => {
         lines.push(`- #${index + 1} ${item.kind} | ${item.where}`);
@@ -356,9 +356,9 @@
     }
     lines.push('');
 
-    lines.push('sameOriginPerformance:');
+    lines.push('performanceSameOrigin:');
     if (!perf.length) {
-      lines.push('- none');
+      lines.push('- brak');
     } else {
       perf.forEach((item, index) => {
         lines.push(`- #${index + 1} ${item.kind}`);
@@ -369,21 +369,21 @@
 
     const blobVideos = videos.filter((video) => /^blob:/i.test(video.currentSrc || '') || /^blob:/i.test(video.getAttribute('src') || video.src || ''));
     lines.push('blobMSE:');
-    lines.push(`- mediaSourceAvailable=${typeof MediaSource !== 'undefined' ? 'yes' : 'no'}`);
-    lines.push(`- videosUsingBlob=${blobVideos.length}`);
-    lines.push(`- createObjectURLCalls=${state.objectUrls.length}`);
+    lines.push(`- mediaSourceDostępne=${typeof MediaSource !== 'undefined' ? 'tak' : 'nie'}`);
+    lines.push(`- wideoUżywająceBlob=${blobVideos.length}`);
+    lines.push(`- wywołaniaCreateObjectURL=${state.objectUrls.length}`);
     if (state.objectUrls.length) {
       state.objectUrls.slice(-10).forEach((entry, index) => {
-        lines.push(`  - #${index + 1} ${entry.at} ${entry.kind} type=${entry.type || '(none)'} size=${entry.size == null ? '(n/a)' : entry.size} url=${entry.url}`);
+        lines.push(`  - #${index + 1} ${entry.at} ${entry.kind} typ=${entry.type || '(brak)'} rozmiar=${entry.size == null ? '(n/d)' : entry.size} url=${entry.url}`);
       });
     }
     lines.push('');
 
-    lines.push('disabledInSafeBuild:');
-    lines.push('- fetch interception');
-    lines.push('- XMLHttpRequest interception');
-    lines.push('- inline script scraping for hidden URLs');
-    lines.push('- hoster-specific extraction heuristics');
+    lines.push('wyłączoneWBezpiecznejWersji:');
+    lines.push('- przechwytywanie fetch');
+    lines.push('- przechwytywanie XMLHttpRequest');
+    lines.push('- skanowanie skryptów inline pod ukryte URL-e');
+    lines.push('- heurystyki ekstrakcji specyficzne dla hosterów');
     return lines.join('\n');
   }
 
